@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use super::frontmatter::{parse_frontmatter, Frontmatter};
+use super::frontmatter::{Frontmatter, parse_frontmatter};
 
 #[derive(Debug, Clone)]
 pub struct Page {

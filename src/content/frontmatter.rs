@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::NaiveDate;
 use serde::{Deserialize, Deserializer};
 
@@ -60,29 +60,29 @@ pub fn parse_frontmatter(content: &str) -> Result<(Frontmatter, &str)> {
     let content = content.trim_start();
 
     // Check for YAML frontmatter (---)
-    if let Some(after_start) = content.strip_prefix("---") {
-        if let Some(end_pos) = after_start.find("\n---") {
-            let frontmatter_str = after_start[..end_pos].trim();
-            let remaining = after_start[end_pos + 4..].trim_start();
+    if let Some(after_start) = content.strip_prefix("---")
+        && let Some(end_pos) = after_start.find("\n---")
+    {
+        let frontmatter_str = after_start[..end_pos].trim();
+        let remaining = after_start[end_pos + 4..].trim_start();
 
-            let frontmatter: Frontmatter = serde_yaml::from_str(frontmatter_str)
-                .map_err(|e| anyhow!("Failed to parse YAML frontmatter: {}", e))?;
+        let frontmatter: Frontmatter = serde_yaml::from_str(frontmatter_str)
+            .map_err(|e| anyhow!("Failed to parse YAML frontmatter: {}", e))?;
 
-            return Ok((frontmatter, remaining));
-        }
+        return Ok((frontmatter, remaining));
     }
 
     // Check for TOML frontmatter (+++)
-    if let Some(after_start) = content.strip_prefix("+++") {
-        if let Some(end_pos) = after_start.find("\n+++") {
-            let frontmatter_str = after_start[..end_pos].trim();
-            let remaining = after_start[end_pos + 4..].trim_start();
+    if let Some(after_start) = content.strip_prefix("+++")
+        && let Some(end_pos) = after_start.find("\n+++")
+    {
+        let frontmatter_str = after_start[..end_pos].trim();
+        let remaining = after_start[end_pos + 4..].trim_start();
 
-            let frontmatter: Frontmatter = toml::from_str(frontmatter_str)
-                .map_err(|e| anyhow!("Failed to parse TOML frontmatter: {}", e))?;
+        let frontmatter: Frontmatter = toml::from_str(frontmatter_str)
+            .map_err(|e| anyhow!("Failed to parse TOML frontmatter: {}", e))?;
 
-            return Ok((frontmatter, remaining));
-        }
+        return Ok((frontmatter, remaining));
     }
 
     Err(anyhow!(

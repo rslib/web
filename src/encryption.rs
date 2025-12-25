@@ -1,10 +1,10 @@
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Key, Nonce,
+    aead::{Aead, KeyInit},
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use argon2::{Algorithm, Argon2, Params, Version};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use rand::RngCore;
 use std::process::Command;
 
@@ -39,10 +39,10 @@ pub fn resolve_password(
     frontmatter_password: Option<&str>,
 ) -> Result<String> {
     // Priority 1: Environment variable
-    if let Ok(password) = std::env::var("SITE_PASSWORD") {
-        if !password.is_empty() {
-            return Ok(password);
-        }
+    if let Ok(password) = std::env::var("SITE_PASSWORD")
+        && !password.is_empty()
+    {
+        return Ok(password);
     }
 
     // Priority 2: Command output

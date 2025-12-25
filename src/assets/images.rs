@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use image::{imageops, DynamicImage, GenericImageView};
+use image::{DynamicImage, GenericImageView, imageops};
 use rayon::prelude::*;
 use std::fs;
 use std::path::Path;
@@ -134,12 +134,13 @@ pub fn copy_static_files<P: AsRef<Path>>(src_dir: P, dest_dir: P) -> Result<()> 
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.starts_with('.'));
 
-            if !is_image && !is_hidden {
-                if let Some(file_name) = path.file_name() {
-                    let dest_path = dest_dir.join(file_name);
-                    fs::copy(&path, &dest_path)
-                        .with_context(|| format!("Failed to copy {:?}", path))?;
-                }
+            if !is_image
+                && !is_hidden
+                && let Some(file_name) = path.file_name()
+            {
+                let dest_path = dest_dir.join(file_name);
+                fs::copy(&path, &dest_path)
+                    .with_context(|| format!("Failed to copy {:?}", path))?;
             }
         }
     }
