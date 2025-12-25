@@ -3,10 +3,10 @@ name: Nix
 on:
   push:
     branches: [trunk]
+    tags: ['v*']
   pull_request:
     branches: [trunk]
-  release:
-    types: [published]
+  workflow_dispatch:
 
 jobs:
   flake-checker:
@@ -47,7 +47,7 @@ jobs:
   cache:
     name: Push to Cache
     runs-on: ${{ matrix.os }}
-    if: github.event_name == 'release'
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     needs: [check, build]
     strategy:
       matrix:
