@@ -2,9 +2,9 @@ name: Nix
 
 on:
   push:
-    branches: [master, main]
+    branches: [trunk]
   pull_request:
-    branches: [master, main]
+    branches: [trunk]
   release:
     types: [published]
 
