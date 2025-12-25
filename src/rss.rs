@@ -127,6 +127,7 @@ mod tests {
             build: crate::config::BuildConfig {
                 output_dir: "dist".to_string(),
                 minify_css: false,
+                css_output: "rs.css".to_string(),
             },
             images: crate::config::ImagesConfig {
                 quality: 85.0,
@@ -139,6 +140,7 @@ mod tests {
             encryption: Default::default(),
             graph: Default::default(),
             rss: Default::default(),
+            text: Default::default(),
         }
     }
 

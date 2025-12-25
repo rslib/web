@@ -83,6 +83,12 @@
 //! sections = ["blog"]                  # Sections to include (default: [] = all)
 //! limit = 20                           # Max items (default: 20)
 //! exclude_encrypted_blocks = false     # Exclude posts with :::encrypted (default: false)
+//!
+//! [text]
+//! enabled = false                      # Enable plain text generation (default: false)
+//! sections = ["blog"]                  # Sections to include (default: [] = all)
+//! exclude_encrypted = false            # Exclude encrypted posts (default: false)
+//! include_home = true                  # Include home page as index.txt (default: true)
 //! ```
 //!
 //! ## Frontmatter
@@ -151,6 +157,7 @@
 //! - [`encryption`] - AES-GCM encryption for protected content
 //! - [`links`] - Link graph and backlink generation
 //! - [`rss`] - RSS feed generation
+//! - [`text`] - Plain text output for curl-friendly access
 //! - [`assets`] - CSS building and image optimization
 //! - [`build`] - Main build orchestrator
 
@@ -163,3 +170,4 @@ pub mod links;
 pub mod markdown;
 pub mod rss;
 pub mod templates;
+pub mod text;

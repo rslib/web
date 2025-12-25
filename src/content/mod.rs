@@ -31,8 +31,18 @@ pub struct Content {
 }
 
 /// Discover all content files based on paths config
-pub fn discover_content(paths: &PathsConfig) -> Result<Content> {
-    let content_dir = Path::new(&paths.content);
+/// If base_dir is provided, paths are resolved relative to it
+pub fn discover_content(paths: &PathsConfig, base_dir: Option<&Path>) -> Result<Content> {
+    let content_path = Path::new(&paths.content);
+    let content_dir = if let Some(base) = base_dir {
+        if content_path.is_absolute() {
+            content_path.to_path_buf()
+        } else {
+            base.join(content_path)
+        }
+    } else {
+        content_path.to_path_buf()
+    };
 
     // Build list of excluded directories (built-in + user-specified)
     let mut excluded: Vec<&str> = vec![&paths.styles, &paths.static_files, &paths.templates];

@@ -23,6 +23,8 @@ pub struct Config {
     pub graph: GraphConfig,
     #[serde(default)]
     pub rss: RssConfig,
+    #[serde(default)]
+    pub text: TextConfig,
 }
 
 /// RSS feed config
@@ -63,6 +65,34 @@ fn default_rss_filename() -> String {
 
 fn default_rss_limit() -> usize {
     20
+}
+
+/// Plain text output config for curl-friendly pages
+#[derive(Debug, Deserialize, Clone)]
+pub struct TextConfig {
+    /// Enable text generation (default: false)
+    #[serde(default)]
+    pub enabled: bool,
+    /// Sections to include (empty = all)
+    #[serde(default)]
+    pub sections: Vec<String>,
+    /// Exclude posts with encrypted content
+    #[serde(default)]
+    pub exclude_encrypted: bool,
+    /// Include home page
+    #[serde(default = "default_true")]
+    pub include_home: bool,
+}
+
+impl Default for TextConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sections: Vec::new(),
+            exclude_encrypted: false,
+            include_home: true,
+        }
+    }
 }
 
 /// Graph visualization config
@@ -203,6 +233,12 @@ pub struct BuildConfig {
     pub output_dir: String,
     #[serde(default = "default_true")]
     pub minify_css: bool,
+    #[serde(default = "default_css_output")]
+    pub css_output: String,
+}
+
+fn default_css_output() -> String {
+    "rs.css".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -477,5 +513,51 @@ exclude_encrypted_blocks = true
         assert_eq!(config.rss.sections, vec!["blog", "notes"]);
         assert_eq!(config.rss.limit, 50);
         assert!(config.rss.exclude_encrypted_blocks);
+    }
+
+    #[test]
+    fn test_config_text_defaults() {
+        let config = Config::from_str(minimal_config()).unwrap();
+        assert!(!config.text.enabled); // Disabled by default
+        assert!(config.text.sections.is_empty());
+        assert!(!config.text.exclude_encrypted);
+        assert!(config.text.include_home);
+    }
+
+    #[test]
+    fn test_config_with_text() {
+        let content = format!(
+            r#"{}
+[text]
+enabled = true
+sections = ["blog", "notes"]
+exclude_encrypted = true
+include_home = false
+"#,
+            minimal_config()
+        );
+
+        let config = Config::from_str(&content).unwrap();
+        assert!(config.text.enabled);
+        assert_eq!(config.text.sections, vec!["blog", "notes"]);
+        assert!(config.text.exclude_encrypted);
+        assert!(!config.text.include_home);
+    }
+
+    #[test]
+    fn test_config_text_enabled_only() {
+        let content = format!(
+            r#"{}
+[text]
+enabled = true
+"#,
+            minimal_config()
+        );
+
+        let config = Config::from_str(&content).unwrap();
+        assert!(config.text.enabled);
+        assert!(config.text.sections.is_empty()); // All sections
+        assert!(!config.text.exclude_encrypted);
+        assert!(config.text.include_home);
     }
 }

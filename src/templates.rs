@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::path::Path;
 use tera::Tera;
 
 use crate::config::Config;
@@ -13,10 +14,11 @@ pub struct Templates {
 }
 
 impl Templates {
-    pub fn new(template_dir: &str) -> Result<Self> {
-        let pattern = format!("{}/**/*.html", template_dir);
+    pub fn new(template_dir: &Path) -> Result<Self> {
+        let template_dir_str = template_dir.to_string_lossy();
+        let pattern = format!("{}/**/*.html", template_dir_str);
         let tera = Tera::new(&pattern)
-            .with_context(|| format!("Failed to load templates from {}", template_dir))?;
+            .with_context(|| format!("Failed to load templates from {}", template_dir_str))?;
 
         Ok(Self { tera })
     }

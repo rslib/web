@@ -14,16 +14,32 @@ use crate::markdown::{
 };
 use crate::rss::generate_rss;
 use crate::templates::Templates;
+use crate::text::{format_home_text, format_post_text};
 
 /// Main build orchestrator
 pub struct Builder {
     config: Config,
     output_dir: PathBuf,
+    project_dir: PathBuf,
 }
 
 impl Builder {
-    pub fn new(config: Config, output_dir: PathBuf) -> Self {
-        Self { config, output_dir }
+    pub fn new(config: Config, output_dir: PathBuf, project_dir: PathBuf) -> Self {
+        Self {
+            config,
+            output_dir,
+            project_dir,
+        }
+    }
+
+    /// Resolve a path relative to the project directory
+    fn resolve_path(&self, path: &str) -> PathBuf {
+        let p = Path::new(path);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            self.project_dir.join(path)
+        }
     }
 
     pub fn build(&mut self) -> Result<()> {
@@ -37,7 +53,7 @@ impl Builder {
         self.process_assets()?;
 
         // Stage 4: Load templates (needed for HTML content processing)
-        let templates = Templates::new(&self.config.paths.templates)?;
+        let templates = Templates::new(&self.resolve_path(&self.config.paths.templates))?;
 
         // Stage 5: Process content through pipeline (markdown) or Tera (HTML)
         let pipeline = Pipeline::from_config(&self.config);
@@ -45,6 +61,11 @@ impl Builder {
 
         // Stage 6: Render and write HTML
         self.render_html(&content, &templates)?;
+
+        // Stage 7: Render text output (if enabled)
+        if self.config.text.enabled {
+            self.render_text(&content)?;
+        }
 
         let total_posts: usize = content.sections.values().map(|s| s.posts.len()).sum();
         println!(
@@ -68,7 +89,7 @@ impl Builder {
     }
 
     fn load_content(&self) -> Result<Content> {
-        discover_content(&self.config.paths)
+        discover_content(&self.config.paths, Some(&self.project_dir))
     }
 
     fn process_assets(&self) -> Result<()> {
@@ -77,8 +98,8 @@ impl Builder {
 
         // Build CSS
         build_css(
-            Path::new(&paths.styles),
-            &static_dir.join("rs.css"),
+            &self.resolve_path(&paths.styles),
+            &static_dir.join(&self.config.build.css_output),
             self.config.build.minify_css,
         )?;
 
@@ -87,10 +108,10 @@ impl Builder {
             quality: self.config.images.quality,
             scale_factor: self.config.images.scale_factor,
         };
-        optimize_images(Path::new(&paths.static_files), &static_dir, &image_config)?;
+        optimize_images(&self.resolve_path(&paths.static_files), &static_dir, &image_config)?;
 
         // Copy other static files
-        copy_static_files(Path::new(&paths.static_files), &static_dir)?;
+        copy_static_files(&self.resolve_path(&paths.static_files), &static_dir)?;
 
         Ok(())
     }
@@ -105,10 +126,10 @@ impl Builder {
 
         // Process home page
         if let Some(page) = content.home.take() {
-            let home_path = format!("{}/{}", paths.content, paths.home);
+            let home_path = self.resolve_path(&paths.content).join(&paths.home);
             let ctx = TransformContext {
                 config: &self.config,
-                current_path: Path::new(&home_path),
+                current_path: &home_path,
                 base_url: &self.config.site.base_url,
             };
             let html = pipeline.process(&page.content, &ctx);
@@ -144,8 +165,10 @@ impl Builder {
         }
 
         // Markdown processing
-        let path_str = format!("{}/{}/{}.md", paths.content, section_name, post.file_slug);
-        let path = PathBuf::from(&path_str);
+        let path = self
+            .resolve_path(&paths.content)
+            .join(section_name)
+            .join(format!("{}.md", post.file_slug));
         let ctx = TransformContext {
             config: &self.config,
             current_path: &path,
@@ -393,6 +416,91 @@ impl Builder {
 
         let rss_xml = generate_rss(&self.config, &posts);
         fs::write(self.output_dir.join(&rss_config.filename), rss_xml)?;
+
+        Ok(())
+    }
+
+    /// Generate plain text versions of posts for curl-friendly access
+    fn render_text(&self, content: &Content) -> Result<()> {
+        let text_config = &self.config.text;
+        let base_url = &self.config.site.base_url;
+
+        // Render home page text if enabled
+        if text_config.include_home && let Some(home_page) = &content.home {
+            let text = format_home_text(
+                &self.config.site.title,
+                &self.config.site.description,
+                &home_page.html,
+                base_url,
+            );
+            fs::write(self.output_dir.join("index.txt"), text)?;
+        }
+
+        // Render posts for each section in parallel
+        content.sections.par_iter().try_for_each(|(section_name, section)| {
+            // Check if this section should be included
+            if !text_config.sections.is_empty() && !text_config.sections.contains(section_name) {
+                return Ok::<_, anyhow::Error>(());
+            }
+
+            section.posts.par_iter().try_for_each(|post| {
+                // Skip encrypted posts if configured
+                if text_config.exclude_encrypted
+                    && (post.frontmatter.encrypted || post.has_encrypted_blocks)
+                {
+                    return Ok::<_, anyhow::Error>(());
+                }
+
+                let url = post.url(&self.config);
+                let relative_path = url.trim_matches('/');
+                let post_dir = self.output_dir.join(relative_path);
+
+                // Format date for display
+                let date_str = post
+                    .frontmatter
+                    .date
+                    .map(|d| d.format("%Y-%m-%d").to_string());
+
+                let tags = post.frontmatter.tags.as_deref().unwrap_or(&[]);
+
+                // For fully encrypted posts, use placeholder content
+                let content = if post.frontmatter.encrypted {
+                    "[This post is encrypted - visit web version to decrypt]"
+                } else {
+                    &post.html
+                };
+
+                let text = format_post_text(
+                    &post.frontmatter.title,
+                    date_str.as_deref(),
+                    post.frontmatter.description.as_deref(),
+                    tags,
+                    post.reading_time,
+                    content,
+                    &url,
+                    base_url,
+                );
+
+                fs::write(post_dir.join("index.txt"), text)?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })?;
+
+        // Count text files generated
+        let text_count: usize = content
+            .sections
+            .iter()
+            .filter(|(name, _)| {
+                text_config.sections.is_empty() || text_config.sections.contains(name)
+            })
+            .flat_map(|(_, section)| section.posts.iter())
+            .filter(|post| {
+                !text_config.exclude_encrypted
+                    || (!post.frontmatter.encrypted && !post.has_encrypted_blocks)
+            })
+            .count();
+
+        println!("Generated {} text files", text_count);
 
         Ok(())
     }
