@@ -3,14 +3,14 @@ use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::assets::{ImageConfig, build_css, copy_static_files, optimize_images};
+use crate::assets::{build_css, copy_static_files, optimize_images, ImageConfig};
 use crate::config::Config;
-use crate::content::{Content, ContentType, Post, discover_content};
+use crate::content::{discover_content, Content, ContentType, Post};
 use crate::encryption::{encrypt_content, resolve_password};
 use crate::links::LinkGraph;
 use crate::markdown::{
-    Pipeline, TransformContext, extract_encrypted_blocks, extract_html_encrypted_blocks,
-    replace_placeholders,
+    extract_encrypted_blocks, extract_html_encrypted_blocks, replace_placeholders, Pipeline,
+    TransformContext,
 };
 use crate::rss::generate_rss;
 use crate::templates::Templates;

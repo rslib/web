@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use super::frontmatter::{Frontmatter, parse_frontmatter};
+use super::frontmatter::{parse_frontmatter, Frontmatter};
 use crate::config::Config;
 use crate::encryption::EncryptedContent;
 

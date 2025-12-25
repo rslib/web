@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use image::{DynamicImage, GenericImageView, imageops};
+use image::{imageops, DynamicImage, GenericImageView};
 use rayon::prelude::*;
 use std::fs;
 use std::path::Path;

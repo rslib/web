@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use chrono::NaiveDate;
 use serde::{Deserialize, Deserializer};
 

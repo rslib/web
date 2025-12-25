@@ -44,23 +44,43 @@
           rustc = rustToolchain;
         };
 
-        # Treefmt configuration
+        # Treefmt configuration (rustfmt via cargo-fmt hook for version consistency)
         treefmtEval = treefmt-nix.lib.evalModule pkgs {
           projectRootFile = "flake.nix";
           programs = {
             nixfmt.enable = true;
-            rustfmt.enable = true;
             taplo.enable = true; # TOML formatter
           };
         };
 
-        # Pre-commit hooks
+        # Pre-commit hooks for nix flake check (no network access)
         pre-commit-check = pre-commit-hooks.lib.${system}.run {
           src = ./.;
           hooks = {
             treefmt = {
               enable = true;
               package = treefmtEval.config.build.wrapper;
+            };
+            rustfmt = {
+              enable = true;
+              entry = "${rustToolchain}/bin/rustfmt --check";
+              types = [ "rust" ];
+            };
+          };
+        };
+
+        # Local-only pre-commit hooks (with network for cargo)
+        pre-commit-local = pre-commit-hooks.lib.${system}.run {
+          src = ./.;
+          hooks = {
+            treefmt = {
+              enable = true;
+              package = treefmtEval.config.build.wrapper;
+            };
+            rustfmt = {
+              enable = true;
+              entry = "${rustToolchain}/bin/rustfmt";
+              types = [ "rust" ];
             };
             cargo-check = {
               enable = true;
@@ -103,7 +123,7 @@
         };
 
         devShells.default = pkgs.mkShell {
-          inherit (pre-commit-check) shellHook;
+          inherit (pre-commit-local) shellHook;
           nativeBuildInputs =
             with pkgs;
             [
