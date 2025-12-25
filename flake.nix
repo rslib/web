@@ -1,4 +1,11 @@
 {
+  nixConfig = {
+    extra-substituters = [ "https://rslib.cachix.org" ];
+    extra-trusted-public-keys = [
+      "rslib.cachix.org-1:8OHneG2sLeTDlsZ4AZyNh8zx2zAwoiZUKVPnl21B+58="
+    ];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
