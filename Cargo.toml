@@ -1,0 +1,66 @@
+[package]
+name = "rs-web"
+version = "0.1.0"
+edition = "2021"
+description = "A fast, opinionated static site generator with encryption support"
+authors = ["Ray Andrew Sinurat"]
+repository = "https://github.com/rslib/web"
+license = "MIT"
+keywords = ["static-site", "blog", "markdown", "encryption"]
+categories = ["command-line-utilities", "web-programming"]
+include = ["/src/**/*", "/Cargo.toml", "/Cargo.lock", "/LICENSE", "/README.md"]
+
+[dependencies]
+# Markdown
+pulldown-cmark = { version = "0.12", features = ["simd"] }
+
+# Templates (runtime)
+tera = "1.20"
+
+# Config & serialization
+toml = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Date handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Image processing
+image = { version = "0.25", default-features = false, features = [
+  "jpeg",
+  "png",
+] }
+webp = "0.3"
+
+# CSS minification
+minifier = "0.3"
+
+# File operations
+walkdir = "2.5"
+ignore = "0.4"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Parallel processing
+rayon = "1.10"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Encryption
+aes-gcm = "0.10"
+argon2 = "0.5"
+base64 = "0.22"
+rand = "0.8"
+
+# Regex for encrypted blocks
+regex = "1.10"
+once_cell = "1.19"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

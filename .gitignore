@@ -1,0 +1,17 @@
+# Build output
+/target
+/dist
+
+# Nix
+.direnv
+result
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+.pre-commit-config.yaml
