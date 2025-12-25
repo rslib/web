@@ -88,6 +88,12 @@
               files = "\\.rs$";
               pass_filenames = false;
             };
+            clippy = {
+              enable = true;
+              entry = "${rustToolchain}/bin/cargo clippy -- -D warnings";
+              files = "\\.rs$";
+              pass_filenames = false;
+            };
             cargo-test = {
               enable = true;
               entry = "${rustToolchain}/bin/cargo test";

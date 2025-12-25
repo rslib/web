@@ -110,7 +110,7 @@ fn process_section(
                 e.depth() == 1
                     && e.path()
                         .extension()
-                        .map_or(false, |ext| ext == "md" || ext == "html" || ext == "htm")
+                        .is_some_and(|ext| ext == "md" || ext == "html" || ext == "htm")
             })
             .map(|e| e.into_path())
             .collect()
@@ -123,7 +123,7 @@ fn process_section(
             .filter(|e| {
                 e.path()
                     .extension()
-                    .map_or(false, |ext| ext == "md" || ext == "html" || ext == "htm")
+                    .is_some_and(|ext| ext == "md" || ext == "html" || ext == "htm")
             })
             .map(|e| e.into_path())
             .collect()

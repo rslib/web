@@ -13,7 +13,7 @@ pub fn build_css<P: AsRef<Path>>(styles_dir: P, output_path: P, minify: bool) ->
         .with_context(|| format!("Failed to read styles directory: {:?}", styles_dir))?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
-        .filter(|path| path.extension().map_or(false, |ext| ext == "css"))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "css"))
         .collect();
 
     css_files.sort();

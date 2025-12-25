@@ -25,7 +25,7 @@ impl Pipeline {
     }
 
     /// Add a transform to the pipeline
-    pub fn add<T: AstTransform + 'static>(mut self, transform: T) -> Self {
+    pub fn with<T: AstTransform + 'static>(mut self, transform: T) -> Self {
         self.transforms.push(Box::new(transform));
         self
     }
@@ -37,7 +37,7 @@ impl Pipeline {
     }
 
     /// Process markdown content through the pipeline
-    pub fn process<'a>(&self, content: &'a str, ctx: &TransformContext<'_>) -> String {
+    pub fn process(&self, content: &str, ctx: &TransformContext<'_>) -> String {
         let mut events = parse_markdown(content);
 
         // Apply each transform
@@ -56,10 +56,10 @@ impl Pipeline {
         use super::transforms::*;
 
         Self::new()
-            .add(LazyImagesTransform)
-            .add(HeadingAnchorsTransform::new())
-            .add(NameHighlightTransform::new(config.highlight.clone()))
-            .add(ExternalLinksTransform)
+            .with(LazyImagesTransform)
+            .with(HeadingAnchorsTransform::new())
+            .with(NameHighlightTransform::new(config.highlight.clone()))
+            .with(ExternalLinksTransform)
             .build()
     }
 }
@@ -69,9 +69,9 @@ impl Default for Pipeline {
         use super::transforms::*;
 
         Self::new()
-            .add(LazyImagesTransform)
-            .add(HeadingAnchorsTransform::new())
-            .add(ExternalLinksTransform)
+            .with(LazyImagesTransform)
+            .with(HeadingAnchorsTransform::new())
+            .with(ExternalLinksTransform)
             .build()
     }
 }

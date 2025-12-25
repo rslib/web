@@ -60,11 +60,10 @@ pub fn parse_frontmatter(content: &str) -> Result<(Frontmatter, &str)> {
     let content = content.trim_start();
 
     // Check for YAML frontmatter (---)
-    if content.starts_with("---") {
-        let after_start = &content[3..];
+    if let Some(after_start) = content.strip_prefix("---") {
         if let Some(end_pos) = after_start.find("\n---") {
-            let frontmatter_str = &after_start[..end_pos].trim();
-            let remaining = &after_start[end_pos + 4..].trim_start();
+            let frontmatter_str = after_start[..end_pos].trim();
+            let remaining = after_start[end_pos + 4..].trim_start();
 
             let frontmatter: Frontmatter = serde_yaml::from_str(frontmatter_str)
                 .map_err(|e| anyhow!("Failed to parse YAML frontmatter: {}", e))?;
@@ -74,11 +73,10 @@ pub fn parse_frontmatter(content: &str) -> Result<(Frontmatter, &str)> {
     }
 
     // Check for TOML frontmatter (+++)
-    if content.starts_with("+++") {
-        let after_start = &content[3..];
+    if let Some(after_start) = content.strip_prefix("+++") {
         if let Some(end_pos) = after_start.find("\n+++") {
-            let frontmatter_str = &after_start[..end_pos].trim();
-            let remaining = &after_start[end_pos + 4..].trim_start();
+            let frontmatter_str = after_start[..end_pos].trim();
+            let remaining = after_start[end_pos + 4..].trim_start();
 
             let frontmatter: Frontmatter = toml::from_str(frontmatter_str)
                 .map_err(|e| anyhow!("Failed to parse TOML frontmatter: {}", e))?;

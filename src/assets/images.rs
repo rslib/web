@@ -40,7 +40,7 @@ pub fn optimize_images<P: AsRef<Path>>(
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
             let path = entry.path();
-            path.extension().map_or(false, |ext| {
+            path.extension().is_some_and(|ext| {
                 let ext = ext.to_string_lossy().to_lowercase();
                 ext == "jpg" || ext == "jpeg" || ext == "png"
             })
@@ -125,14 +125,14 @@ pub fn copy_static_files<P: AsRef<Path>>(src_dir: P, dest_dir: P) -> Result<()> 
                 .map(|e| e.to_lowercase());
 
             // Skip images (handled separately) and hidden files
-            let is_image = ext.as_ref().map_or(false, |e| {
-                e == "jpg" || e == "jpeg" || e == "png" || e == "webp"
-            });
+            let is_image = ext
+                .as_ref()
+                .is_some_and(|e| e == "jpg" || e == "jpeg" || e == "png" || e == "webp");
 
             let is_hidden = path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .map_or(false, |n| n.starts_with('.'));
+                .is_some_and(|n| n.starts_with('.'));
 
             if !is_image && !is_hidden {
                 if let Some(file_name) = path.file_name() {
