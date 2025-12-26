@@ -64,13 +64,17 @@ jobs:
           path: ${{ matrix.name }}-${{ github.ref_name }}.tar.gz
 
   release:
-    name: Create Release
+    name: Release & Publish
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Need full history for changelog
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -205,14 +209,5 @@ jobs:
             artifacts/SHA256SUMS.txt
           body_path: CHANGELOG.md
 
-  publish:
-    name: Publish to crates.io
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      - name: Publish
+      - name: Publish to crates.io
         run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
