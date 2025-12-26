@@ -88,9 +88,11 @@ jobs:
       - name: Generate Changelog
         id: changelog
         run: |
-          # Get the previous tag
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          # Get all tags sorted by version
           CURRENT_TAG="${{ github.ref_name }}"
+
+          # Get the previous tag (excluding current)
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${CURRENT_TAG}$" | head -n1)
 
           echo "Generating changelog from ${PREV_TAG:-beginning} to ${CURRENT_TAG}"
 
@@ -109,6 +111,11 @@ jobs:
           CHORES=""
           DOCS=""
           REFACTOR=""
+          PERF=""
+          TESTS=""
+          BUILD=""
+          CI=""
+          BREAKING=""
           OTHER=""
 
           while IFS= read -r line; do
@@ -116,29 +123,58 @@ jobs:
             MSG=$(echo "$line" | cut -d'|' -f1)
             HASH=$(echo "$line" | cut -d'|' -f2)
 
+            # Skip version bump commits - these are release automation, not actual changes
+            if echo "$MSG" | grep -qiE "^chore!?(\([^)]*\))?:.*bump.*(version|to v?[0-9])"; then
+              echo "Skipping version bump commit: $MSG"
+              continue
+            fi
+
             COMMIT_LINK="https://github.com/${{ github.repository }}/commit/${HASH}"
+
+            # Check for breaking changes (indicated by ! after type)
+            IS_BREAKING=""
+            if echo "$MSG" | grep -qE "^[a-z]+!(\([^)]*\))?:"; then
+              IS_BREAKING="**BREAKING** "
+            fi
+
             case "$MSG" in
-              feat:*|feat\(*) FEATURES="${FEATURES}- ${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
-              fix:*|fix\(*) FIXES="${FIXES}- ${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
-              chore:*|chore\(*) CHORES="${CHORES}- ${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
-              docs:*|docs\(*) DOCS="${DOCS}- ${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
-              refactor:*|refactor\(*) REFACTOR="${REFACTOR}- ${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
-              *) OTHER="${OTHER}- ${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+              feat:*|feat!:*|feat\(*) FEATURES="${FEATURES}- ${IS_BREAKING}${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+              fix:*|fix!:*|fix\(*) FIXES="${FIXES}- ${IS_BREAKING}${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+              perf:*|perf!:*|perf\(*) PERF="${PERF}- ${IS_BREAKING}${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+              refactor:*|refactor!:*|refactor\(*) REFACTOR="${REFACTOR}- ${IS_BREAKING}${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+              docs:*|docs!:*|docs\(*) DOCS="${DOCS}- ${IS_BREAKING}${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+              test:*|test!:*|test\(*|tests:*|tests\(*) TESTS="${TESTS}- ${IS_BREAKING}${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+              build:*|build!:*|build\(*) BUILD="${BUILD}- ${IS_BREAKING}${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+              ci:*|ci!:*|ci\(*) CI="${CI}- ${IS_BREAKING}${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+              chore:*|chore!:*|chore\(*) CHORES="${CHORES}- ${IS_BREAKING}${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+              *) OTHER="${OTHER}- ${IS_BREAKING}${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
             esac
           done <<< "$COMMITS"
 
-          # Build final changelog
+          # Build final changelog (ordered by importance)
           if [ -n "$FEATURES" ]; then
             CHANGELOG="${CHANGELOG}## Features\n${FEATURES}\n"
           fi
           if [ -n "$FIXES" ]; then
             CHANGELOG="${CHANGELOG}## Bug Fixes\n${FIXES}\n"
           fi
+          if [ -n "$PERF" ]; then
+            CHANGELOG="${CHANGELOG}## Performance\n${PERF}\n"
+          fi
           if [ -n "$REFACTOR" ]; then
             CHANGELOG="${CHANGELOG}## Refactoring\n${REFACTOR}\n"
           fi
           if [ -n "$DOCS" ]; then
             CHANGELOG="${CHANGELOG}## Documentation\n${DOCS}\n"
+          fi
+          if [ -n "$TESTS" ]; then
+            CHANGELOG="${CHANGELOG}## Tests\n${TESTS}\n"
+          fi
+          if [ -n "$BUILD" ]; then
+            CHANGELOG="${CHANGELOG}## Build\n${BUILD}\n"
+          fi
+          if [ -n "$CI" ]; then
+            CHANGELOG="${CHANGELOG}## CI\n${CI}\n"
           fi
           if [ -n "$CHORES" ]; then
             CHANGELOG="${CHANGELOG}## Chores\n${CHORES}\n"
@@ -150,6 +186,11 @@ jobs:
           # Add compare link
           if [ -n "$PREV_TAG" ]; then
             CHANGELOG="${CHANGELOG}\n**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${CURRENT_TAG}"
+          fi
+
+          # Handle empty changelog
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="No notable changes in this release.\n"
           fi
 
           # Write to file for the release action

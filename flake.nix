@@ -136,6 +136,21 @@
         checks = {
           pre-commit-check = pre-commit-check;
           formatting = treefmtEval.config.build.check self;
+          clippy = rustPlatform.buildRustPackage {
+            pname = "${cargoToml.package.name}-clippy";
+            version = cargoToml.package.version;
+            src = ./.;
+            cargoLock.lockFile = ./Cargo.lock;
+            nativeBuildInputs = with pkgs; [ pkg-config ];
+            buildInputs = with pkgs; [ openssl ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
+            buildPhase = ''
+              cargo clippy -- -D warnings
+            '';
+            installPhase = ''
+              touch $out
+            '';
+            doCheck = false;
+          };
         };
 
         devShells.default = pkgs.mkShell {
