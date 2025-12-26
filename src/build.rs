@@ -3,7 +3,10 @@ use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::assets::{ImageConfig, build_css, copy_static_files, optimize_images};
+use crate::assets::{
+    ImageConfig, build_css, copy_single_static_file, copy_static_files, optimize_images,
+    optimize_single_image,
+};
 use crate::config::Config;
 use crate::content::{Content, ContentType, Post, discover_content};
 use crate::encryption::{encrypt_content, resolve_password};
@@ -15,6 +18,7 @@ use crate::markdown::{
 use crate::rss::generate_rss;
 use crate::templates::Templates;
 use crate::text::{format_home_text, format_post_text};
+use crate::watch::ChangeSet;
 
 /// Main build orchestrator
 pub struct Builder {
@@ -513,5 +517,134 @@ impl Builder {
         println!("Generated {} text files", text_count);
 
         Ok(())
+    }
+
+    /// Perform an incremental build based on what changed
+    pub fn incremental_build(&mut self, changes: &ChangeSet) -> Result<()> {
+        // If full rebuild is needed, just do a regular build
+        if changes.full_rebuild {
+            return self.build();
+        }
+
+        // Handle CSS-only changes (fastest path)
+        if changes.rebuild_css
+            && !changes.reload_templates
+            && !changes.rebuild_home
+            && changes.content_files.is_empty()
+        {
+            self.rebuild_css_only()?;
+
+            // Also handle any static/image changes
+            self.process_static_changes(changes)?;
+            return Ok(());
+        }
+
+        // Handle static file changes without content rebuild
+        if !changes.reload_templates
+            && !changes.rebuild_home
+            && changes.content_files.is_empty()
+            && !changes.rebuild_css
+        {
+            self.process_static_changes(changes)?;
+            return Ok(());
+        }
+
+        // For template or content changes, we need to rebuild content
+        let content = self.load_content()?;
+        let templates = Templates::new(&self.resolve_path(&self.config.paths.templates))?;
+        let pipeline = Pipeline::from_config(&self.config);
+
+        // Process all content (could be optimized further for single-file changes)
+        let content = self.process_content(content, &pipeline, &templates)?;
+
+        // Render HTML
+        self.render_html(&content, &templates)?;
+
+        // Render text if enabled
+        if self.config.text.enabled {
+            self.render_text(&content)?;
+        }
+
+        // Handle any CSS changes
+        if changes.rebuild_css {
+            self.rebuild_css_only()?;
+        }
+
+        // Handle static/image changes
+        self.process_static_changes(changes)?;
+
+        let total_posts: usize = content.sections.values().map(|s| s.posts.len()).sum();
+        println!(
+            "Rebuilt {} posts in {} sections",
+            total_posts,
+            content.sections.len()
+        );
+
+        Ok(())
+    }
+
+    /// Rebuild only CSS
+    fn rebuild_css_only(&self) -> Result<()> {
+        let static_dir = self.output_dir.join("static");
+        build_css(
+            &self.resolve_path(&self.config.paths.styles),
+            &static_dir.join(&self.config.build.css_output),
+            self.config.build.minify_css,
+        )?;
+        println!("Rebuilt CSS");
+        Ok(())
+    }
+
+    /// Process static file and image changes
+    fn process_static_changes(&self, changes: &ChangeSet) -> Result<()> {
+        let static_dir = self.output_dir.join("static");
+        let source_static = self.resolve_path(&self.config.paths.static_files);
+
+        let image_config = ImageConfig {
+            quality: self.config.images.quality,
+            scale_factor: self.config.images.scale_factor,
+        };
+
+        // Process changed images
+        for rel_path in &changes.image_files {
+            let src = source_static.join(rel_path.as_path());
+            let dest = static_dir.join(rel_path.as_path());
+
+            if src.exists() {
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                optimize_single_image(&src, &dest, &image_config)?;
+                println!("Optimized image: {}", rel_path.display());
+            }
+        }
+
+        // Process changed static files
+        for rel_path in &changes.static_files {
+            let src = source_static.join(rel_path.as_path());
+            let dest = static_dir.join(rel_path.as_path());
+
+            if src.exists() {
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                copy_single_static_file(&src, &dest)?;
+                println!("Copied static file: {}", rel_path.display());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Reload config from disk
+    pub fn reload_config(&mut self) -> Result<()> {
+        let config_path = self.project_dir.join("config.toml");
+        self.config = crate::config::Config::load(&config_path)?;
+        Ok(())
+    }
+
+    /// Get a reference to the current config
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 }

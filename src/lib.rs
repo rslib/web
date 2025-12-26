@@ -171,3 +171,4 @@ pub mod markdown;
 pub mod rss;
 pub mod templates;
 pub mod text;
+pub mod watch;

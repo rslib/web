@@ -50,14 +50,14 @@ pub fn optimize_images<P: AsRef<Path>>(
     // Process images
     image_files.par_iter().try_for_each(|entry| {
         let path = entry.path();
-        optimize_single_image(&path, output_dir, config)
+        optimize_image_to_dir(&path, output_dir, config)
     })?;
 
     Ok(())
 }
 
-/// Optimize a single image
-fn optimize_single_image(input_path: &Path, output_dir: &Path, config: &ImageConfig) -> Result<()> {
+/// Optimize a single image (batch version - output to directory)
+fn optimize_image_to_dir(input_path: &Path, output_dir: &Path, config: &ImageConfig) -> Result<()> {
     let img = image::open(input_path)
         .with_context(|| format!("Failed to open image: {:?}", input_path))?;
 
@@ -100,6 +100,64 @@ fn optimize_single_image(input_path: &Path, output_dir: &Path, config: &ImageCon
     fs::copy(input_path, &original_path)
         .with_context(|| format!("Failed to copy original: {:?}", original_path))?;
 
+    Ok(())
+}
+
+/// Optimize a single image to a specific output path (for incremental builds)
+pub fn optimize_single_image(
+    input_path: &Path,
+    output_path: &Path,
+    config: &ImageConfig,
+) -> Result<()> {
+    let img = image::open(input_path)
+        .with_context(|| format!("Failed to open image: {:?}", input_path))?;
+
+    let (w, h) = img.dimensions();
+
+    // Resize if scale factor is less than 1
+    let img = if config.scale_factor < 1.0 {
+        let new_w = (w as f64 * config.scale_factor) as u32;
+        let new_h = (h as f64 * config.scale_factor) as u32;
+        DynamicImage::ImageRgba8(imageops::resize(
+            &img,
+            new_w,
+            new_h,
+            imageops::FilterType::Triangle,
+        ))
+    } else {
+        img
+    };
+
+    // Get output directory
+    let output_dir = output_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Invalid output path: {:?}", output_path))?;
+
+    // Get the file stem for WebP naming
+    let stem = output_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("image");
+
+    // Convert to WebP
+    let encoder = Encoder::from_image(&img)
+        .map_err(|e| anyhow::anyhow!("Failed to create WebP encoder: {}", e))?;
+    let webp: WebPMemory = encoder.encode(config.quality);
+
+    let webp_path = output_dir.join(format!("{}.webp", stem));
+    fs::write(&webp_path, &*webp)
+        .with_context(|| format!("Failed to write WebP: {:?}", webp_path))?;
+
+    // Also copy original (as fallback)
+    fs::copy(input_path, output_path)
+        .with_context(|| format!("Failed to copy original: {:?}", output_path))?;
+
+    Ok(())
+}
+
+/// Copy a single static file (for incremental builds)
+pub fn copy_single_static_file(src: &Path, dest: &Path) -> Result<()> {
+    fs::copy(src, dest).with_context(|| format!("Failed to copy {:?} to {:?}", src, dest))?;
     Ok(())
 }
 
