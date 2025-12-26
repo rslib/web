@@ -53,7 +53,15 @@
           };
         };
 
-        # Pre-commit hooks for nix flake check (no network access)
+        # Helper to create cargo wrapper scripts
+        mkCargoWrapper =
+          name: cmd:
+          pkgs.writeShellScript name ''
+            export PATH="${rustToolchain}/bin:$PATH"
+            ${cmd}
+          '';
+
+        # Pre-commit hooks for CI (no network access - only formatting checks)
         pre-commit-check = pre-commit-hooks.lib.${system}.run {
           src = ./.;
           hooks = {
@@ -63,21 +71,14 @@
             };
             cargo-fmt = {
               enable = true;
-              entry =
-                let
-                  wrapper = pkgs.writeShellScript "cargo-fmt-check" ''
-                    export PATH="${rustToolchain}/bin:$PATH"
-                    cargo fmt --check
-                  '';
-                in
-                "${wrapper}";
+              entry = "${mkCargoWrapper "cargo-fmt-check" "cargo fmt --check"}";
               files = "\\.rs$";
               pass_filenames = false;
             };
           };
         };
 
-        # Local-only pre-commit hooks (with network for cargo)
+        # Pre-commit hooks for local development (with network access)
         pre-commit-local = pre-commit-hooks.lib.${system}.run {
           src = ./.;
           hooks = {
@@ -87,25 +88,25 @@
             };
             cargo-fmt = {
               enable = true;
-              entry = "${rustToolchain}/bin/cargo fmt";
+              entry = "${mkCargoWrapper "cargo-fmt" "cargo fmt"}";
               files = "\\.rs$";
               pass_filenames = false;
             };
             cargo-check = {
               enable = true;
-              entry = "${rustToolchain}/bin/cargo check";
+              entry = "${mkCargoWrapper "cargo-check" "cargo check"}";
               files = "\\.rs$";
               pass_filenames = false;
             };
             clippy = {
               enable = true;
-              entry = "${rustToolchain}/bin/cargo clippy -- -D warnings";
+              entry = "${mkCargoWrapper "cargo-clippy" "cargo clippy -- -D warnings"}";
               files = "\\.rs$";
               pass_filenames = false;
             };
             cargo-test = {
               enable = true;
-              entry = "${rustToolchain}/bin/cargo test";
+              entry = "${mkCargoWrapper "cargo-test" "cargo test"}";
               files = "\\.rs$";
               pass_filenames = false;
             };
