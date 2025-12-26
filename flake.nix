@@ -95,19 +95,19 @@
             cargo-check = {
               enable = true;
               entry = "${mkCargoWrapper "cargo-check" "cargo check"}";
-              files = "\\.rs$";
+              files = "(\\.rs$|Cargo\\.toml$|Cargo\\.lock$)";
               pass_filenames = false;
             };
             clippy = {
               enable = true;
               entry = "${mkCargoWrapper "cargo-clippy" "cargo clippy -- -D warnings"}";
-              files = "\\.rs$";
+              files = "(\\.rs$|Cargo\\.toml$|Cargo\\.lock$)";
               pass_filenames = false;
             };
             cargo-test = {
               enable = true;
               entry = "${mkCargoWrapper "cargo-test" "cargo test"}";
-              files = "\\.rs$";
+              files = "(\\.rs$|Cargo\\.toml$|Cargo\\.lock$)";
               pass_filenames = false;
             };
           };
