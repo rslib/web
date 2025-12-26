@@ -29,7 +29,27 @@ rs-web build
 
 # Build to custom output directory
 rs-web build --output public
+
+# Watch for changes and rebuild incrementally
+rs-web build --watch
 ```
+
+## Logging
+
+Control log verbosity with `--debug`, `--log-level`, or the `RS_WEB_LOG_LEVEL` environment variable.
+
+```bash
+# Enable debug logging (shorthand)
+rs-web --debug build
+
+# Set specific log level (trace, debug, info, warning, error)
+rs-web --log-level trace build
+
+# Use environment variable
+RS_WEB_LOG_LEVEL=debug rs-web build
+```
+
+**Priority order:** `--debug` > `--log-level` > `RS_WEB_LOG_LEVEL` > default (`warning`)
 
 ## Configuration
 

@@ -16,6 +16,18 @@
 //!
 //! # Build to custom output directory
 //! rs-web build --output public
+//!
+//! # Watch for changes and rebuild incrementally
+//! rs-web build --watch
+//!
+//! # Enable debug logging
+//! rs-web --debug build
+//!
+//! # Set specific log level (trace, debug, info, warning, error)
+//! rs-web --log-level trace build
+//!
+//! # Or use environment variable
+//! RS_WEB_LOG_LEVEL=debug rs-web build
 //! ```
 //!
 //! ## Configuration

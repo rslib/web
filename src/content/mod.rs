@@ -12,6 +12,7 @@ pub use frontmatter::Frontmatter;
 use crate::config::PathsConfig;
 use anyhow::Result;
 use ignore::WalkBuilder;
+use log::{debug, trace};
 use std::collections::HashMap;
 use std::path::Path;
 use walkdir::WalkDir;
@@ -33,6 +34,7 @@ pub struct Content {
 /// Discover all content files based on paths config
 /// If base_dir is provided, paths are resolved relative to it
 pub fn discover_content(paths: &PathsConfig, base_dir: Option<&Path>) -> Result<Content> {
+    debug!("Discovering content from {:?}", paths.content);
     let content_path = Path::new(&paths.content);
     let content_dir = if let Some(base) = base_dir {
         if content_path.is_absolute() {
@@ -43,16 +45,20 @@ pub fn discover_content(paths: &PathsConfig, base_dir: Option<&Path>) -> Result<
     } else {
         content_path.to_path_buf()
     };
+    trace!("Content directory resolved to: {:?}", content_dir);
 
     // Build list of excluded directories (built-in + user-specified)
     let mut excluded: Vec<&str> = vec![&paths.styles, &paths.static_files, &paths.templates];
     excluded.extend(paths.exclude.iter().map(|s| s.as_str()));
+    trace!("Excluded directories: {:?}", excluded);
 
     // Load home page
     let home_path = content_dir.join(&paths.home);
     let home = if home_path.exists() {
+        trace!("Loading home page from {:?}", home_path);
         Some(Page::from_file(&home_path)?)
     } else {
+        trace!("No home page found at {:?}", home_path);
         None
     };
 
@@ -85,6 +91,10 @@ pub fn discover_content(paths: &PathsConfig, base_dir: Option<&Path>) -> Result<
         process_section(&path, &excluded, &mut sections, paths)?;
     }
 
+    debug!(
+        "Content discovery complete: {} sections found",
+        sections.len()
+    );
     Ok(Content { home, sections })
 }
 
@@ -106,8 +116,11 @@ fn process_section(
         .iter()
         .any(|ex| section_name == *ex || path.ends_with(ex))
     {
+        trace!("Skipping excluded section: {}", section_name);
         return Ok(());
     }
+
+    trace!("Processing section: {}", section_name);
 
     // Collect content file paths (markdown and HTML) using appropriate walker
     let post_paths: Vec<_> = if paths.respect_gitignore {
@@ -152,6 +165,7 @@ fn process_section(
     posts.sort_by(|a, b| b.frontmatter.date.cmp(&a.frontmatter.date));
 
     if !posts.is_empty() {
+        debug!("Section '{}': {} posts loaded", section_name, posts.len());
         sections.insert(
             section_name.clone(),
             Section {
@@ -159,6 +173,8 @@ fn process_section(
                 posts,
             },
         );
+    } else {
+        trace!("Section '{}': no posts found", section_name);
     }
 
     Ok(())

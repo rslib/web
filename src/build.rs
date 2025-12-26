@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use log::{debug, info, trace};
 use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -47,31 +48,56 @@ impl Builder {
     }
 
     pub fn build(&mut self) -> Result<()> {
+        info!("Starting build");
+        debug!("Output directory: {:?}", self.output_dir);
+        debug!("Project directory: {:?}", self.project_dir);
+
         // Stage 1: Clean output directory
+        trace!("Stage 1: Cleaning output directory");
         self.clean()?;
 
         // Stage 2: Discover and load content
+        trace!("Stage 2: Discovering content");
         let content = self.load_content()?;
+        debug!(
+            "Found {} sections with {} total posts",
+            content.sections.len(),
+            content
+                .sections
+                .values()
+                .map(|s| s.posts.len())
+                .sum::<usize>()
+        );
 
         // Stage 3: Process assets
+        trace!("Stage 3: Processing assets");
         self.process_assets()?;
 
         // Stage 4: Load templates (needed for HTML content processing)
+        trace!("Stage 4: Loading templates");
         let templates = Templates::new(&self.resolve_path(&self.config.paths.templates))?;
 
         // Stage 5: Process content through pipeline (markdown) or Tera (HTML)
+        trace!("Stage 5: Processing content through pipeline");
         let pipeline = Pipeline::from_config(&self.config);
         let content = self.process_content(content, &pipeline, &templates)?;
 
         // Stage 6: Render and write HTML
+        trace!("Stage 6: Rendering HTML");
         self.render_html(&content, &templates)?;
 
         // Stage 7: Render text output (if enabled)
         if self.config.text.enabled {
+            trace!("Stage 7: Rendering text output");
             self.render_text(&content)?;
         }
 
         let total_posts: usize = content.sections.values().map(|s| s.posts.len()).sum();
+        info!(
+            "Build complete: {} posts in {} sections",
+            total_posts,
+            content.sections.len()
+        );
         println!(
             "Generated {} posts in {} sections",
             total_posts,
@@ -83,10 +109,12 @@ impl Builder {
 
     fn clean(&self) -> Result<()> {
         if self.output_dir.exists() {
+            debug!("Removing existing output directory: {:?}", self.output_dir);
             fs::remove_dir_all(&self.output_dir).with_context(|| {
                 format!("Failed to clean output directory: {:?}", self.output_dir)
             })?;
         }
+        trace!("Creating output directories");
         fs::create_dir_all(&self.output_dir)?;
         fs::create_dir_all(self.output_dir.join("static"))?;
         Ok(())
@@ -101,6 +129,7 @@ impl Builder {
         let paths = &self.config.paths;
 
         // Build CSS
+        debug!("Building CSS from {:?}", self.resolve_path(&paths.styles));
         build_css(
             &self.resolve_path(&paths.styles),
             &static_dir.join(&self.config.build.css_output),
@@ -108,6 +137,10 @@ impl Builder {
         )?;
 
         // Optimize images
+        debug!(
+            "Optimizing images (quality: {}, scale: {})",
+            self.config.images.quality, self.config.images.scale_factor
+        );
         let image_config = ImageConfig {
             quality: self.config.images.quality,
             scale_factor: self.config.images.scale_factor,
@@ -119,6 +152,10 @@ impl Builder {
         )?;
 
         // Copy other static files
+        debug!(
+            "Copying static files from {:?}",
+            self.resolve_path(&paths.static_files)
+        );
         copy_static_files(&self.resolve_path(&paths.static_files), &static_dir)?;
 
         Ok(())
@@ -167,8 +204,14 @@ impl Builder {
         paths: &crate::config::PathsConfig,
         templates: &Templates,
     ) -> Result<()> {
+        trace!(
+            "Processing post: {} ({})",
+            post.frontmatter.title, section_name
+        );
+
         // Handle HTML content files - process through Tera
         if post.content_type == ContentType::Html {
+            trace!("Post is HTML content, processing through Tera");
             return self.process_html_post(post, templates);
         }
 
@@ -185,6 +228,7 @@ impl Builder {
 
         // Check if post should be fully encrypted
         if post.frontmatter.encrypted {
+            debug!("Encrypting post: {}", post.frontmatter.title);
             let html = pipeline.process(&post.content, &ctx);
             let password = resolve_password(
                 &self.config.encryption,
@@ -210,6 +254,11 @@ impl Builder {
                 // No encrypted blocks, process normally
                 post.html = pipeline.process(&post.content, &ctx);
             } else {
+                debug!(
+                    "Found {} encrypted blocks in post: {}",
+                    preprocess_result.blocks.len(),
+                    post.frontmatter.title
+                );
                 // Process main content with placeholders
                 let main_html = pipeline.process(&preprocess_result.markdown, &ctx);
 
@@ -352,10 +401,13 @@ impl Builder {
 
     fn render_html(&self, content: &Content, templates: &Templates) -> Result<()> {
         // Build link graph for backlinks
+        debug!("Building link graph for backlinks");
         let link_graph = LinkGraph::build(&self.config, content);
+        trace!("Link graph built");
 
         // Generate graph if enabled
         if self.config.graph.enabled {
+            debug!("Generating graph visualization");
             let graph_data = link_graph.to_graph_data();
 
             // Write graph.json for visualization
@@ -392,6 +444,7 @@ impl Builder {
 
         // Generate RSS feed
         if self.config.rss.enabled {
+            debug!("Generating RSS feed");
             self.generate_rss(content)?;
         }
 
@@ -399,6 +452,7 @@ impl Builder {
     }
 
     fn generate_rss(&self, content: &Content) -> Result<()> {
+        trace!("Building RSS feed");
         let rss_config = &self.config.rss;
 
         // Collect posts from specified sections (or all if empty)
@@ -521,8 +575,12 @@ impl Builder {
 
     /// Perform an incremental build based on what changed
     pub fn incremental_build(&mut self, changes: &ChangeSet) -> Result<()> {
+        debug!("Starting incremental build");
+        trace!("Change set: {:?}", changes);
+
         // If full rebuild is needed, just do a regular build
         if changes.full_rebuild {
+            info!("Full rebuild required");
             return self.build();
         }
 
@@ -639,7 +697,9 @@ impl Builder {
     /// Reload config from disk
     pub fn reload_config(&mut self) -> Result<()> {
         let config_path = self.project_dir.join("config.toml");
+        debug!("Reloading config from {:?}", config_path);
         self.config = crate::config::Config::load(&config_path)?;
+        info!("Config reloaded successfully");
         Ok(())
     }
 

@@ -5,6 +5,7 @@ use aes_gcm::{
 use anyhow::{Context, Result, anyhow};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use log::{debug, trace};
 use rand::RngCore;
 use std::process::Command;
 
@@ -38,15 +39,19 @@ pub fn resolve_password(
     config: &EncryptionConfig,
     frontmatter_password: Option<&str>,
 ) -> Result<String> {
+    trace!("Resolving encryption password");
+
     // Priority 1: Environment variable
     if let Ok(password) = std::env::var("SITE_PASSWORD")
         && !password.is_empty()
     {
+        debug!("Using password from SITE_PASSWORD environment variable");
         return Ok(password);
     }
 
     // Priority 2: Command output
     if let Some(ref cmd) = config.password_command {
+        trace!("Executing password command");
         let output = Command::new("sh")
             .arg("-c")
             .arg(cmd)
@@ -59,6 +64,7 @@ pub fn resolve_password(
                 .trim()
                 .to_string();
             if !password.is_empty() {
+                debug!("Using password from command: {}", cmd);
                 return Ok(password);
             }
         } else {
@@ -73,11 +79,13 @@ pub fn resolve_password(
 
     // Priority 3: Config password
     if let Some(ref password) = config.password {
+        debug!("Using password from config");
         return Ok(password.clone());
     }
 
     // Priority 4: Frontmatter password
     if let Some(password) = frontmatter_password {
+        debug!("Using password from frontmatter");
         return Ok(password.to_string());
     }
 
@@ -109,6 +117,8 @@ fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; KEY_LENGTH]> {
 
 /// Encrypt content using AES-256-GCM with Argon2id key derivation
 pub fn encrypt_content(content: &str, password: &str) -> Result<EncryptedContent> {
+    trace!("Encrypting content ({} bytes)", content.len());
+
     // Generate random salt and nonce
     let mut salt = [0u8; SALT_LENGTH];
     let mut nonce_bytes = [0u8; NONCE_LENGTH];
@@ -116,6 +126,7 @@ pub fn encrypt_content(content: &str, password: &str) -> Result<EncryptedContent
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
 
     // Derive key from password
+    trace!("Deriving key with Argon2id");
     let key = derive_key(password, &salt)?;
 
     // Create cipher and encrypt
@@ -126,6 +137,7 @@ pub fn encrypt_content(content: &str, password: &str) -> Result<EncryptedContent
         .encrypt(nonce, content.as_bytes())
         .map_err(|e| anyhow!("Encryption failed: {}", e))?;
 
+    trace!("Content encrypted successfully");
     Ok(EncryptedContent {
         ciphertext: BASE64.encode(&ciphertext),
         salt: BASE64.encode(salt),

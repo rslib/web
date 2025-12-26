@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use log::{debug, trace};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -15,10 +16,18 @@ pub struct Templates {
 
 impl Templates {
     pub fn new(template_dir: &Path) -> Result<Self> {
+        debug!("Loading templates from {:?}", template_dir);
         let template_dir_str = template_dir.to_string_lossy();
         let pattern = format!("{}/**/*.html", template_dir_str);
         let tera = Tera::new(&pattern)
             .with_context(|| format!("Failed to load templates from {}", template_dir_str))?;
+
+        let template_count = tera.get_template_names().count();
+        debug!("Loaded {} templates", template_count);
+        trace!(
+            "Available templates: {:?}",
+            tera.get_template_names().collect::<Vec<_>>()
+        );
 
         Ok(Self { tera })
     }

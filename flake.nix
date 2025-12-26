@@ -63,7 +63,14 @@
             };
             cargo-fmt = {
               enable = true;
-              entry = "${rustToolchain}/bin/cargo fmt --check";
+              entry =
+                let
+                  wrapper = pkgs.writeShellScript "cargo-fmt-check" ''
+                    export PATH="${rustToolchain}/bin:$PATH"
+                    cargo fmt --check
+                  '';
+                in
+                "${wrapper}";
               files = "\\.rs$";
               pass_filenames = false;
             };

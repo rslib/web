@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use log::{debug, trace, warn};
 use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_mini::{DebouncedEventKind, new_debouncer};
 use std::collections::HashSet;
@@ -140,6 +141,7 @@ impl FileWatcher {
 
         // Watch config file
         if config_path.exists() {
+            trace!("Watching config: {:?}", config_path);
             watcher
                 .watch(&config_path, RecursiveMode::NonRecursive)
                 .with_context(|| format!("Failed to watch config: {:?}", config_path))?;
@@ -147,6 +149,7 @@ impl FileWatcher {
 
         // Watch content directory
         if content_dir.exists() {
+            trace!("Watching content: {:?}", content_dir);
             watcher
                 .watch(&content_dir, RecursiveMode::Recursive)
                 .with_context(|| format!("Failed to watch content: {:?}", content_dir))?;
@@ -154,6 +157,7 @@ impl FileWatcher {
 
         // Watch templates directory
         if templates_dir.exists() {
+            trace!("Watching templates: {:?}", templates_dir);
             watcher
                 .watch(&templates_dir, RecursiveMode::Recursive)
                 .with_context(|| format!("Failed to watch templates: {:?}", templates_dir))?;
@@ -161,6 +165,7 @@ impl FileWatcher {
 
         // Watch styles directory
         if styles_dir.exists() {
+            trace!("Watching styles: {:?}", styles_dir);
             watcher
                 .watch(&styles_dir, RecursiveMode::Recursive)
                 .with_context(|| format!("Failed to watch styles: {:?}", styles_dir))?;
@@ -168,11 +173,13 @@ impl FileWatcher {
 
         // Watch static directory
         if static_dir.exists() {
+            trace!("Watching static: {:?}", static_dir);
             watcher
                 .watch(&static_dir, RecursiveMode::Recursive)
                 .with_context(|| format!("Failed to watch static: {:?}", static_dir))?;
         }
 
+        debug!("File watcher initialized");
         println!("Watching for changes...");
         println!("  Content:   {:?}", content_dir);
         println!("  Templates: {:?}", templates_dir);
@@ -196,20 +203,23 @@ impl FileWatcher {
     /// Wait for changes and return aggregated change set
     pub fn wait_for_changes(&self) -> Result<ChangeSet> {
         let mut changes = ChangeSet::default();
+        trace!("Waiting for file changes...");
 
         // Block until we receive events
         match self.rx.recv() {
             Ok(Ok(events)) => {
+                trace!("Received {} file events", events.len());
                 for event in events {
                     if event.kind == DebouncedEventKind::Any
                         && let Some(change) = self.classify_change(&event.path)
                     {
+                        trace!("Classified change: {:?} -> {:?}", event.path, change);
                         changes.add(change);
                     }
                 }
             }
             Ok(Err(e)) => {
-                eprintln!("Watch error: {:?}", e);
+                warn!("Watch error: {:?}", e);
             }
             Err(e) => {
                 return Err(anyhow::anyhow!("Watch channel closed: {:?}", e));
@@ -230,7 +240,7 @@ impl FileWatcher {
                     }
                 }
                 Ok(Err(e)) => {
-                    eprintln!("Watch error: {:?}", e);
+                    warn!("Watch error: {:?}", e);
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => break,
@@ -249,6 +259,7 @@ impl FileWatcher {
 
         // Skip events from the output directory (prevents feedback loop)
         if path.starts_with(&self.output_dir) {
+            trace!("Skipping output directory path: {:?}", path);
             return None;
         }
 
@@ -257,6 +268,7 @@ impl FileWatcher {
             .components()
             .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
         {
+            trace!("Skipping hidden path: {:?}", path);
             return None;
         }
 
