@@ -24,10 +24,12 @@ pub struct Section {
     pub posts: Vec<Post>,
 }
 
-/// Content holds the home page and all discovered sections
+/// Content holds the home page, root pages, and all discovered sections
 #[derive(Debug)]
 pub struct Content {
     pub home: Option<Page>,
+    /// Root-level pages (e.g., 404.md, about.md) excluding the home page
+    pub root_pages: Vec<Page>,
     pub sections: HashMap<String, Section>,
 }
 
@@ -62,6 +64,61 @@ pub fn discover_content(paths: &PathsConfig, base_dir: Option<&Path>) -> Result<
         None
     };
 
+    // Discover root-level pages (markdown files in content root, excluding home)
+    let home_file_name = Path::new(&paths.home)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("index.md");
+
+    let root_page_paths: Vec<_> = if paths.respect_gitignore {
+        WalkBuilder::new(&content_dir)
+            .max_depth(Some(1))
+            .hidden(false)
+            .build()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.depth() == 1
+                    && e.path().is_file()
+                    && e.path()
+                        .extension()
+                        .is_some_and(|ext| ext == "md" || ext == "html" || ext == "htm")
+                    && e.path()
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n != home_file_name)
+                        .unwrap_or(false)
+            })
+            .map(|e| e.into_path())
+            .collect()
+    } else {
+        WalkDir::new(&content_dir)
+            .min_depth(1)
+            .max_depth(1)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path().is_file()
+                    && e.path()
+                        .extension()
+                        .is_some_and(|ext| ext == "md" || ext == "html" || ext == "htm")
+                    && e.path()
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n != home_file_name)
+                        .unwrap_or(false)
+            })
+            .map(|e| e.into_path())
+            .collect()
+    };
+
+    let mut root_pages = Vec::new();
+    for page_path in root_page_paths {
+        trace!("Loading root page from {:?}", page_path);
+        let page = Page::from_file(&page_path)?;
+        root_pages.push(page);
+    }
+    debug!("Loaded {} root pages", root_pages.len());
+
     // Discover all sections (subdirectories)
     let mut sections = HashMap::new();
 
@@ -92,10 +149,15 @@ pub fn discover_content(paths: &PathsConfig, base_dir: Option<&Path>) -> Result<
     }
 
     debug!(
-        "Content discovery complete: {} sections found",
-        sections.len()
+        "Content discovery complete: {} sections found, {} root pages",
+        sections.len(),
+        root_pages.len()
     );
-    Ok(Content { home, sections })
+    Ok(Content {
+        home,
+        root_pages,
+        sections,
+    })
 }
 
 /// Process a section directory and add it to sections map

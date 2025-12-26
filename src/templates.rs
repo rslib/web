@@ -191,6 +191,34 @@ impl Templates {
         })
     }
 
+    /// Render a root page (like 404.md, about.md)
+    pub fn render_root_page(&self, config: &Config, page: &Page) -> Result<String> {
+        let mut context = tera::Context::new();
+
+        // Site info
+        context.insert("site", &SiteContext::from(config));
+
+        // Page info
+        context.insert("page", &PageContext::from_page(config, page));
+
+        // Page content
+        context.insert("content", &page.html);
+
+        // Use frontmatter template if specified, otherwise default to "page.html"
+        let template = page
+            .frontmatter
+            .template
+            .clone()
+            .unwrap_or_else(|| "page.html".to_string());
+
+        self.tera.render(&template, &context).with_context(|| {
+            format!(
+                "Failed to render root page: {} with template: {}",
+                page.frontmatter.title, template
+            )
+        })
+    }
+
     /// Render the graph page
     pub fn render_graph(&self, config: &Config, graph_data: &GraphData) -> Result<String> {
         let mut context = tera::Context::new();

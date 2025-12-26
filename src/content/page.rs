@@ -8,6 +8,8 @@ pub struct Page {
     pub frontmatter: Frontmatter,
     pub content: String,
     pub html: String,
+    /// The file stem (e.g., "404" from "404.md") for output naming
+    pub file_slug: Option<String>,
 }
 
 impl Page {
@@ -17,10 +19,17 @@ impl Page {
 
         let (frontmatter, content) = parse_frontmatter(&raw_content)?;
 
+        let file_slug = path
+            .as_ref()
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string());
+
         Ok(Self {
             frontmatter,
             content: content.to_string(),
             html: String::new(), // Will be filled by markdown pipeline
+            file_slug,
         })
     }
 

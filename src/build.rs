@@ -181,6 +181,28 @@ impl Builder {
             content.home = Some(page.with_html(html));
         }
 
+        // Process root pages
+        let content_dir = self.resolve_path(&paths.content);
+        content.root_pages = content
+            .root_pages
+            .into_iter()
+            .map(|page| {
+                let file_name = page
+                    .file_slug
+                    .as_ref()
+                    .map(|s| format!("{}.md", s))
+                    .unwrap_or_else(|| "page.md".to_string());
+                let page_path = content_dir.join(&file_name);
+                let ctx = TransformContext {
+                    config: &self.config,
+                    current_path: &page_path,
+                    base_url: &self.config.site.base_url,
+                };
+                let html = pipeline.process(&page.content, &ctx);
+                page.with_html(html)
+            })
+            .collect();
+
         // Process all posts
         content
             .sections
@@ -430,6 +452,14 @@ impl Builder {
         if let Some(home_page) = &content.home {
             let html = templates.render_home(&self.config, home_page, content)?;
             fs::write(self.output_dir.join("index.html"), html)?;
+        }
+
+        // Render root pages (404.md -> 404.html, etc.)
+        for page in &content.root_pages {
+            if let Some(slug) = &page.file_slug {
+                let html = templates.render_root_page(&self.config, page)?;
+                fs::write(self.output_dir.join(format!("{}.html", slug)), html)?;
+            }
         }
 
         // Render posts for each section
