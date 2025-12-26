@@ -17,19 +17,24 @@ pub fn html_to_text(html: &str) -> String {
 
     // Replace encrypted blocks with a friendly message
     // Match the entire encrypted-content div structure (outer div with nested decrypt-prompt div)
-    let encrypted_re = Regex::new(r#"(?s)<div[^>]*class="[^"]*encrypted-content[^"]*"[^>]*>.*?</div>\s*</div>"#).unwrap();
+    let encrypted_re =
+        Regex::new(r#"(?s)<div[^>]*class="[^"]*encrypted-content[^"]*"[^>]*>.*?</div>\s*</div>"#)
+            .unwrap();
     text = encrypted_re
-        .replace_all(&text, "\n    [Encrypted content - visit web version to decrypt]\n")
+        .replace_all(
+            &text,
+            "\n    [Encrypted content - visit web version to decrypt]\n",
+        )
         .to_string();
 
     // Also remove decrypt-prompt divs that might remain
-    let decrypt_prompt_re = Regex::new(r#"(?s)<div[^>]*class="[^"]*decrypt-prompt[^"]*"[^>]*>.*?</div>"#).unwrap();
-    text = decrypt_prompt_re
-        .replace_all(&text, "")
-        .to_string();
+    let decrypt_prompt_re =
+        Regex::new(r#"(?s)<div[^>]*class="[^"]*decrypt-prompt[^"]*"[^>]*>.*?</div>"#).unwrap();
+    text = decrypt_prompt_re.replace_all(&text, "").to_string();
 
     // Remove any remaining UI elements from encrypted blocks
-    let encrypted_msg_re = Regex::new(r#"(?s)<p[^>]*class="[^"]*encrypted-message[^"]*"[^>]*>.*?</p>"#).unwrap();
+    let encrypted_msg_re =
+        Regex::new(r#"(?s)<p[^>]*class="[^"]*encrypted-message[^"]*"[^>]*>.*?</p>"#).unwrap();
     text = encrypted_msg_re.replace_all(&text, "").to_string();
 
     // Remove password inputs and decrypt buttons
@@ -212,7 +217,6 @@ fn process_blockquotes(html: &str) -> String {
     text
 }
 
-
 /// Format a code block with consistent styling
 fn format_code_block(html_content: &str) -> String {
     let content = decode_html_entities(html_content);
@@ -267,7 +271,6 @@ fn format_code_block(html_content: &str) -> String {
     result
 }
 
-
 /// Clean cell content - normalize to ASCII-safe text
 fn clean_cell(content: &str) -> String {
     let stripped = strip_tags(content);
@@ -275,7 +278,13 @@ fn clean_cell(content: &str) -> String {
     // Keep only ASCII printable characters and collapse whitespace
     decoded
         .chars()
-        .map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { ' ' })
+        .map(|c| {
+            if c.is_ascii_graphic() || c == ' ' {
+                c
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -476,8 +485,14 @@ fn decode_html_entities(text: &str) -> String {
         .replace("&#39;", "'")
         .replace("&apos;", "'")
         .replace("&nbsp;", " ")
-        .replace(['\u{00A0}', '\u{2007}', '\u{2008}', '\u{2009}', '\u{200A}', '\u{202F}', '\u{205F}', '\u{3000}'], " ")  // Various Unicode spaces -> regular space
-        .replace(['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}'], "")  // Zero-width characters -> remove
+        .replace(
+            [
+                '\u{00A0}', '\u{2007}', '\u{2008}', '\u{2009}', '\u{200A}', '\u{202F}', '\u{205F}',
+                '\u{3000}',
+            ],
+            " ",
+        ) // Various Unicode spaces -> regular space
+        .replace(['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}'], "") // Zero-width characters -> remove
         .replace("&middot;", ".")
         .replace("&bull;", "*")
         .replace("&mdash;", "-")
@@ -492,10 +507,7 @@ fn decode_html_entities(text: &str) -> String {
 
 /// Clean up text output: trim trailing whitespace from lines, collapse multiple blank lines
 fn cleanup_text(text: &str) -> String {
-    let lines: Vec<&str> = text
-        .lines()
-        .map(|line| line.trim_end())
-        .collect();
+    let lines: Vec<&str> = text.lines().map(|line| line.trim_end()).collect();
 
     // Collapse multiple consecutive blank lines into at most 2
     let mut result = String::new();
@@ -532,7 +544,12 @@ fn box_line_centered(content: &str, width: usize) -> String {
     let total_padding = content_width.saturating_sub(display_len);
     let left_pad = total_padding / 2;
     let right_pad = total_padding - left_pad;
-    format!("║{}{}{}║\n", " ".repeat(left_pad), content, " ".repeat(right_pad))
+    format!(
+        "║{}{}{}║\n",
+        " ".repeat(left_pad),
+        content,
+        " ".repeat(right_pad)
+    )
 }
 
 /// Format a post as plain text with metadata header
@@ -584,7 +601,10 @@ pub fn format_post_text(
         }
     }
 
-    output.push_str(&box_line(&format!("  Reading time: {} min", reading_time), width));
+    output.push_str(&box_line(
+        &format!("  Reading time: {} min", reading_time),
+        width,
+    ));
 
     // Handle long URLs by wrapping if needed
     let full_url = format!("{}{}", base_url, url);
@@ -623,12 +643,7 @@ pub fn format_post_text(
 }
 
 /// Format home page as plain text
-pub fn format_home_text(
-    title: &str,
-    description: &str,
-    content: &str,
-    base_url: &str,
-) -> String {
+pub fn format_home_text(title: &str, description: &str, content: &str, base_url: &str) -> String {
     let mut output = String::new();
     let width = 74;
 
@@ -717,7 +732,8 @@ mod tests {
 
     #[test]
     fn test_html_to_text_table() {
-        let html = "<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr></table>";
+        let html =
+            "<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr></table>";
         let text = html_to_text(html);
         assert!(text.contains("Name"));
         assert!(text.contains("Age"));

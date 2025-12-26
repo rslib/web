@@ -61,10 +61,11 @@
               enable = true;
               package = treefmtEval.config.build.wrapper;
             };
-            rustfmt = {
+            cargo-fmt = {
               enable = true;
-              entry = "${rustToolchain}/bin/rustfmt --check";
-              types = [ "rust" ];
+              entry = "${rustToolchain}/bin/cargo fmt --check";
+              files = "\\.rs$";
+              pass_filenames = false;
             };
           };
         };
@@ -77,10 +78,11 @@
               enable = true;
               package = treefmtEval.config.build.wrapper;
             };
-            rustfmt = {
+            cargo-fmt = {
               enable = true;
-              entry = "${rustToolchain}/bin/rustfmt";
-              types = [ "rust" ];
+              entry = "${rustToolchain}/bin/cargo fmt";
+              files = "\\.rs$";
+              pass_filenames = false;
             };
             cargo-check = {
               enable = true;

@@ -108,7 +108,11 @@ impl Builder {
             quality: self.config.images.quality,
             scale_factor: self.config.images.scale_factor,
         };
-        optimize_images(&self.resolve_path(&paths.static_files), &static_dir, &image_config)?;
+        optimize_images(
+            &self.resolve_path(&paths.static_files),
+            &static_dir,
+            &image_config,
+        )?;
 
         // Copy other static files
         copy_static_files(&self.resolve_path(&paths.static_files), &static_dir)?;
@@ -426,7 +430,9 @@ impl Builder {
         let base_url = &self.config.site.base_url;
 
         // Render home page text if enabled
-        if text_config.include_home && let Some(home_page) = &content.home {
+        if text_config.include_home
+            && let Some(home_page) = &content.home
+        {
             let text = format_home_text(
                 &self.config.site.title,
                 &self.config.site.description,
@@ -437,54 +443,58 @@ impl Builder {
         }
 
         // Render posts for each section in parallel
-        content.sections.par_iter().try_for_each(|(section_name, section)| {
-            // Check if this section should be included
-            if !text_config.sections.is_empty() && !text_config.sections.contains(section_name) {
-                return Ok::<_, anyhow::Error>(());
-            }
-
-            section.posts.par_iter().try_for_each(|post| {
-                // Skip encrypted posts if configured
-                if text_config.exclude_encrypted
-                    && (post.frontmatter.encrypted || post.has_encrypted_blocks)
+        content
+            .sections
+            .par_iter()
+            .try_for_each(|(section_name, section)| {
+                // Check if this section should be included
+                if !text_config.sections.is_empty() && !text_config.sections.contains(section_name)
                 {
                     return Ok::<_, anyhow::Error>(());
                 }
 
-                let url = post.url(&self.config);
-                let relative_path = url.trim_matches('/');
-                let post_dir = self.output_dir.join(relative_path);
+                section.posts.par_iter().try_for_each(|post| {
+                    // Skip encrypted posts if configured
+                    if text_config.exclude_encrypted
+                        && (post.frontmatter.encrypted || post.has_encrypted_blocks)
+                    {
+                        return Ok::<_, anyhow::Error>(());
+                    }
 
-                // Format date for display
-                let date_str = post
-                    .frontmatter
-                    .date
-                    .map(|d| d.format("%Y-%m-%d").to_string());
+                    let url = post.url(&self.config);
+                    let relative_path = url.trim_matches('/');
+                    let post_dir = self.output_dir.join(relative_path);
 
-                let tags = post.frontmatter.tags.as_deref().unwrap_or(&[]);
+                    // Format date for display
+                    let date_str = post
+                        .frontmatter
+                        .date
+                        .map(|d| d.format("%Y-%m-%d").to_string());
 
-                // For fully encrypted posts, use placeholder content
-                let content = if post.frontmatter.encrypted {
-                    "[This post is encrypted - visit web version to decrypt]"
-                } else {
-                    &post.html
-                };
+                    let tags = post.frontmatter.tags.as_deref().unwrap_or(&[]);
 
-                let text = format_post_text(
-                    &post.frontmatter.title,
-                    date_str.as_deref(),
-                    post.frontmatter.description.as_deref(),
-                    tags,
-                    post.reading_time,
-                    content,
-                    &url,
-                    base_url,
-                );
+                    // For fully encrypted posts, use placeholder content
+                    let content = if post.frontmatter.encrypted {
+                        "[This post is encrypted - visit web version to decrypt]"
+                    } else {
+                        &post.html
+                    };
 
-                fs::write(post_dir.join("index.txt"), text)?;
-                Ok::<_, anyhow::Error>(())
-            })
-        })?;
+                    let text = format_post_text(
+                        &post.frontmatter.title,
+                        date_str.as_deref(),
+                        post.frontmatter.description.as_deref(),
+                        tags,
+                        post.reading_time,
+                        content,
+                        &url,
+                        base_url,
+                    );
+
+                    fs::write(post_dir.join("index.txt"), text)?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })?;
 
         // Count text files generated
         let text_count: usize = content
