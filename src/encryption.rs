@@ -31,17 +31,26 @@ pub struct EncryptedContent {
 }
 
 /// Resolve password from various sources in priority order:
-/// 1. SITE_PASSWORD environment variable
-/// 2. password_command output
-/// 3. config password
-/// 4. per-post password (frontmatter)
+/// 1. per-post password (frontmatter) - highest priority
+/// 2. SITE_PASSWORD environment variable
+/// 3. password_command output
+/// 4. config password (global default)
+///
+/// Note: Partial block passwords are handled separately in build.rs
+/// and take priority over all of these.
 pub fn resolve_password(
     config: &EncryptionConfig,
     frontmatter_password: Option<&str>,
 ) -> Result<String> {
     trace!("Resolving encryption password");
 
-    // Priority 1: Environment variable
+    // Priority 1: Frontmatter password (highest priority)
+    if let Some(password) = frontmatter_password {
+        debug!("Using password from frontmatter");
+        return Ok(password.to_string());
+    }
+
+    // Priority 2: Environment variable
     if let Ok(password) = std::env::var("SITE_PASSWORD")
         && !password.is_empty()
     {
@@ -49,7 +58,7 @@ pub fn resolve_password(
         return Ok(password);
     }
 
-    // Priority 2: Command output
+    // Priority 3: Command output
     if let Some(ref cmd) = config.password_command {
         trace!("Executing password command");
         let output = Command::new("sh")
@@ -77,16 +86,10 @@ pub fn resolve_password(
         }
     }
 
-    // Priority 3: Config password
+    // Priority 4: Config password (global default)
     if let Some(ref password) = config.password {
         debug!("Using password from config");
         return Ok(password.clone());
-    }
-
-    // Priority 4: Frontmatter password
-    if let Some(password) = frontmatter_password {
-        debug!("Using password from frontmatter");
-        return Ok(password.to_string());
     }
 
     Err(anyhow!(
@@ -233,9 +236,21 @@ mod tests {
             password: Some("config-pass".to_string()),
         };
 
-        // Config password takes priority over frontmatter
-        let password = resolve_password(&config, Some("frontmatter-pass")).unwrap();
+        // Config password is used when no frontmatter password
+        let password = resolve_password(&config, None).unwrap();
         assert_eq!(password, "config-pass");
+    }
+
+    #[test]
+    fn test_frontmatter_password_overrides_config() {
+        let config = EncryptionConfig {
+            password_command: None,
+            password: Some("config-pass".to_string()),
+        };
+
+        // Frontmatter password takes priority over config
+        let password = resolve_password(&config, Some("frontmatter-pass")).unwrap();
+        assert_eq!(password, "frontmatter-pass");
     }
 
     #[test]

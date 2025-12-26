@@ -346,6 +346,11 @@ impl Builder {
                 // No encrypted blocks, use rendered HTML as-is
                 post.html = rendered_html;
             } else {
+                debug!(
+                    "Found {} encrypted blocks in HTML post: {}",
+                    preprocess_result.blocks.len(),
+                    post.frontmatter.title
+                );
                 // Process and encrypt each block
                 let encrypted_blocks: Result<Vec<_>> = preprocess_result
                     .blocks
