@@ -85,13 +85,84 @@ jobs:
           done
           sha256sum *.tar.gz > SHA256SUMS.txt
 
+      - name: Generate Changelog
+        id: changelog
+        run: |
+          # Get the previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          CURRENT_TAG="${{ github.ref_name }}"
+
+          echo "Generating changelog from ${PREV_TAG:-beginning} to ${CURRENT_TAG}"
+
+          # Start building the changelog
+          CHANGELOG=""
+
+          if [ -z "$PREV_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"%s|%h" $CURRENT_TAG)
+          else
+            COMMITS=$(git log --pretty=format:"%s|%h" ${PREV_TAG}..${CURRENT_TAG})
+          fi
+
+          # Categorize commits
+          FEATURES=""
+          FIXES=""
+          CHORES=""
+          DOCS=""
+          REFACTOR=""
+          OTHER=""
+
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            MSG=$(echo "$line" | cut -d'|' -f1)
+            HASH=$(echo "$line" | cut -d'|' -f2)
+
+            COMMIT_LINK="https://github.com/${{ github.repository }}/commit/${HASH}"
+            case "$MSG" in
+              feat:*|feat\(*) FEATURES="${FEATURES}- ${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+              fix:*|fix\(*) FIXES="${FIXES}- ${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+              chore:*|chore\(*) CHORES="${CHORES}- ${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+              docs:*|docs\(*) DOCS="${DOCS}- ${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+              refactor:*|refactor\(*) REFACTOR="${REFACTOR}- ${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+              *) OTHER="${OTHER}- ${MSG} ([${HASH}](${COMMIT_LINK}))\n" ;;
+            esac
+          done <<< "$COMMITS"
+
+          # Build final changelog
+          if [ -n "$FEATURES" ]; then
+            CHANGELOG="${CHANGELOG}## Features\n${FEATURES}\n"
+          fi
+          if [ -n "$FIXES" ]; then
+            CHANGELOG="${CHANGELOG}## Bug Fixes\n${FIXES}\n"
+          fi
+          if [ -n "$REFACTOR" ]; then
+            CHANGELOG="${CHANGELOG}## Refactoring\n${REFACTOR}\n"
+          fi
+          if [ -n "$DOCS" ]; then
+            CHANGELOG="${CHANGELOG}## Documentation\n${DOCS}\n"
+          fi
+          if [ -n "$CHORES" ]; then
+            CHANGELOG="${CHANGELOG}## Chores\n${CHORES}\n"
+          fi
+          if [ -n "$OTHER" ]; then
+            CHANGELOG="${CHANGELOG}## Other Changes\n${OTHER}\n"
+          fi
+
+          # Add compare link
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG="${CHANGELOG}\n**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${CURRENT_TAG}"
+          fi
+
+          # Write to file for the release action
+          echo -e "$CHANGELOG" > CHANGELOG.md
+          cat CHANGELOG.md
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
             artifacts/*.tar.gz
             artifacts/SHA256SUMS.txt
-          generate_release_notes: true
+          body_path: CHANGELOG.md
 
   publish:
     name: Publish to crates.io
