@@ -164,8 +164,12 @@ pub struct PathsConfig {
     pub templates: String,
     #[serde(default = "default_home_page")]
     pub home: String,
+    /// Patterns to exclude (supports regex). Matches both directories and files.
     #[serde(default)]
     pub exclude: Vec<String>,
+    /// Include default exclusions like README.md, LICENSE.md, etc. (default: true)
+    #[serde(default = "default_true")]
+    pub exclude_defaults: bool,
     /// Respect .gitignore when discovering content (default: true)
     #[serde(default = "default_true")]
     pub respect_gitignore: bool,
@@ -180,6 +184,7 @@ impl Default for PathsConfig {
             templates: default_templates_dir(),
             home: default_home_page(),
             exclude: Vec::new(),
+            exclude_defaults: true,
             respect_gitignore: true,
         }
     }
@@ -387,6 +392,7 @@ exclude = ["drafts", "private"]
         assert_eq!(config.paths.templates, "templates");
         assert_eq!(config.paths.home, "index.md");
         assert!(config.paths.exclude.is_empty());
+        assert!(config.paths.exclude_defaults);
         assert!(config.paths.respect_gitignore);
 
         // Templates and permalinks default to empty

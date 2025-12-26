@@ -65,7 +65,8 @@
 //! static_files = "static"              # Static files (default: "static")
 //! templates = "templates"              # Templates (default: "templates")
 //! home = "index.md"                    # Home page file (default: "index.md")
-//! exclude = ["drafts", "private"]      # Directories to exclude (default: [])
+//! exclude = ["drafts", "^temp.*"]      # Regex patterns to exclude files/dirs (default: [])
+//! exclude_defaults = true              # Exclude README.md, LICENSE.md, etc. (default: true)
 //!
 //! [highlight]
 //! names = ["John Doe", "Jane Doe"]     # Names to highlight (default: [])
@@ -102,6 +103,25 @@
 //! exclude_encrypted = false            # Exclude encrypted posts (default: false)
 //! include_home = true                  # Include home page as index.txt (default: true)
 //! ```
+//!
+//! ## Root Pages
+//!
+//! Markdown files at the content root (besides the home page) are processed as
+//! standalone pages. For example, `404.md` becomes `404.html`:
+//!
+//! ```yaml
+//! ---
+//! title: "404 - Page Not Found"
+//! template: "error.html"
+//! ---
+//!
+//! # Page Not Found
+//! The page you're looking for doesn't exist.
+//! ```
+//!
+//! Default excluded files (disable with `exclude_defaults = false`):
+//! - README.md, LICENSE.md, CHANGELOG.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
+//! - Hidden files (starting with `.`)
 //!
 //! ## Frontmatter
 //!

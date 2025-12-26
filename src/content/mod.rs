@@ -13,9 +13,51 @@ use crate::config::PathsConfig;
 use anyhow::Result;
 use ignore::WalkBuilder;
 use log::{debug, trace};
+use regex::Regex;
 use std::collections::HashMap;
 use std::path::Path;
 use walkdir::WalkDir;
+
+/// Default patterns to exclude (common non-content files)
+const DEFAULT_EXCLUDE_PATTERNS: &[&str] = &[
+    r"^README\.md$",
+    r"^LICENSE\.md$",
+    r"^CHANGELOG\.md$",
+    r"^CONTRIBUTING\.md$",
+    r"^CODE_OF_CONDUCT\.md$",
+    r"^\.", // Hidden files/directories
+];
+
+/// Matcher for excluding files and directories based on regex patterns
+pub struct ExcludeMatcher {
+    patterns: Vec<Regex>,
+}
+
+impl ExcludeMatcher {
+    /// Create a new exclude matcher from PathsConfig
+    pub fn from_config(paths: &PathsConfig) -> Result<Self> {
+        let mut patterns = Vec::new();
+
+        // Add default patterns if enabled
+        if paths.exclude_defaults {
+            for pattern in DEFAULT_EXCLUDE_PATTERNS {
+                patterns.push(Regex::new(pattern)?);
+            }
+        }
+
+        // Add user-specified patterns
+        for pattern in &paths.exclude {
+            patterns.push(Regex::new(pattern)?);
+        }
+
+        Ok(Self { patterns })
+    }
+
+    /// Check if a name (file or directory) should be excluded
+    pub fn is_excluded(&self, name: &str) -> bool {
+        self.patterns.iter().any(|p| p.is_match(name))
+    }
+}
 
 /// A section is a subdirectory containing posts (e.g., blog, projects, notes)
 #[derive(Debug)]
@@ -49,10 +91,12 @@ pub fn discover_content(paths: &PathsConfig, base_dir: Option<&Path>) -> Result<
     };
     trace!("Content directory resolved to: {:?}", content_dir);
 
-    // Build list of excluded directories (built-in + user-specified)
-    let mut excluded: Vec<&str> = vec![&paths.styles, &paths.static_files, &paths.templates];
-    excluded.extend(paths.exclude.iter().map(|s| s.as_str()));
-    trace!("Excluded directories: {:?}", excluded);
+    // Create exclude matcher from config
+    let exclude_matcher = ExcludeMatcher::from_config(paths)?;
+
+    // Built-in excluded directories (styles, static, templates)
+    let builtin_excluded: Vec<&str> = vec![&paths.styles, &paths.static_files, &paths.templates];
+    trace!("Built-in excluded directories: {:?}", builtin_excluded);
 
     // Load home page
     let home_path = content_dir.join(&paths.home);
@@ -77,16 +121,14 @@ pub fn discover_content(paths: &PathsConfig, base_dir: Option<&Path>) -> Result<
             .build()
             .filter_map(|e| e.ok())
             .filter(|e| {
+                let file_name = e.path().file_name().and_then(|n| n.to_str()).unwrap_or("");
                 e.depth() == 1
                     && e.path().is_file()
                     && e.path()
                         .extension()
                         .is_some_and(|ext| ext == "md" || ext == "html" || ext == "htm")
-                    && e.path()
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|n| n != home_file_name)
-                        .unwrap_or(false)
+                    && file_name != home_file_name
+                    && !exclude_matcher.is_excluded(file_name)
             })
             .map(|e| e.into_path())
             .collect()
@@ -97,15 +139,13 @@ pub fn discover_content(paths: &PathsConfig, base_dir: Option<&Path>) -> Result<
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| {
+                let file_name = e.path().file_name().and_then(|n| n.to_str()).unwrap_or("");
                 e.path().is_file()
                     && e.path()
                         .extension()
                         .is_some_and(|ext| ext == "md" || ext == "html" || ext == "htm")
-                    && e.path()
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|n| n != home_file_name)
-                        .unwrap_or(false)
+                    && file_name != home_file_name
+                    && !exclude_matcher.is_excluded(file_name)
             })
             .map(|e| e.into_path())
             .collect()
@@ -129,7 +169,10 @@ pub fn discover_content(paths: &PathsConfig, base_dir: Option<&Path>) -> Result<
             .hidden(false) // Don't skip hidden files by default
             .build()
             .filter_map(|e| e.ok())
-            .filter(|e| e.depth() == 1 && e.path().is_dir())
+            .filter(|e| {
+                let dir_name = e.path().file_name().and_then(|n| n.to_str()).unwrap_or("");
+                e.depth() == 1 && e.path().is_dir() && !exclude_matcher.is_excluded(dir_name)
+            })
             .map(|e| e.into_path())
             .collect()
     } else {
@@ -138,14 +181,23 @@ pub fn discover_content(paths: &PathsConfig, base_dir: Option<&Path>) -> Result<
             .max_depth(1)
             .into_iter()
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_dir())
+            .filter(|e| {
+                let dir_name = e.path().file_name().and_then(|n| n.to_str()).unwrap_or("");
+                e.path().is_dir() && !exclude_matcher.is_excluded(dir_name)
+            })
             .map(|e| e.into_path())
             .collect()
     };
 
     // Process each section
     for path in section_paths {
-        process_section(&path, &excluded, &mut sections, paths)?;
+        process_section(
+            &path,
+            &builtin_excluded,
+            &exclude_matcher,
+            &mut sections,
+            paths,
+        )?;
     }
 
     debug!(
@@ -163,7 +215,8 @@ pub fn discover_content(paths: &PathsConfig, base_dir: Option<&Path>) -> Result<
 /// Process a section directory and add it to sections map
 fn process_section(
     path: &Path,
-    excluded: &[&str],
+    builtin_excluded: &[&str],
+    exclude_matcher: &ExcludeMatcher,
     sections: &mut HashMap<String, Section>,
     paths: &PathsConfig,
 ) -> Result<()> {
@@ -173,12 +226,12 @@ fn process_section(
         .unwrap_or("")
         .to_string();
 
-    // Skip excluded directories
-    if excluded
+    // Skip built-in excluded directories (styles, static, templates)
+    if builtin_excluded
         .iter()
         .any(|ex| section_name == *ex || path.ends_with(ex))
     {
-        trace!("Skipping excluded section: {}", section_name);
+        trace!("Skipping built-in excluded section: {}", section_name);
         return Ok(());
     }
 
@@ -192,10 +245,12 @@ fn process_section(
             .build()
             .filter_map(|e| e.ok())
             .filter(|e| {
+                let file_name = e.path().file_name().and_then(|n| n.to_str()).unwrap_or("");
                 e.depth() == 1
                     && e.path()
                         .extension()
                         .is_some_and(|ext| ext == "md" || ext == "html" || ext == "htm")
+                    && !exclude_matcher.is_excluded(file_name)
             })
             .map(|e| e.into_path())
             .collect()
@@ -206,9 +261,11 @@ fn process_section(
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| {
+                let file_name = e.path().file_name().and_then(|n| n.to_str()).unwrap_or("");
                 e.path()
                     .extension()
                     .is_some_and(|ext| ext == "md" || ext == "html" || ext == "htm")
+                    && !exclude_matcher.is_excluded(file_name)
             })
             .map(|e| e.into_path())
             .collect()
