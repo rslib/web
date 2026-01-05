@@ -69,7 +69,7 @@ notify = "6.1"
 notify-debouncer-mini = "0.4"
 
 # Git metadata
-git2 = "0.19"
+git2 = { version = "0.19", default-features = false }
 
 [profile.release]
 lto = true
