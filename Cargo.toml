@@ -15,7 +15,7 @@ include = ["/src/**/*", "/Cargo.toml", "/Cargo.lock", "/LICENSE", "/README.md"]
 pulldown-cmark = { version = "0.12", features = ["simd"] }
 
 # Templates (runtime)
-tera = "1.20"
+tera = { version = "1.20", features = ["date-locale"] }
 
 # Config & serialization
 toml = "0.8"
