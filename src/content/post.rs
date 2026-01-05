@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::frontmatter::{Frontmatter, parse_frontmatter};
 use crate::config::Config;
@@ -30,6 +30,8 @@ pub struct Post {
     pub has_encrypted_blocks: bool,
     /// Source file type (Markdown or HTML)
     pub content_type: ContentType,
+    /// Path to the source file
+    pub source_path: PathBuf,
 }
 
 impl Post {
@@ -74,6 +76,7 @@ impl Post {
             encrypted_content: None, // Will be filled if frontmatter.encrypted is true
             has_encrypted_blocks: false, // Will be set if :::encrypted blocks found
             content_type,
+            source_path: path.to_path_buf(),
         })
     }
 
@@ -176,6 +179,7 @@ mod tests {
             encrypted_content: None,
             has_encrypted_blocks: false,
             content_type: ContentType::Markdown,
+            source_path: PathBuf::new(),
         }
     }
 

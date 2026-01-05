@@ -198,6 +198,7 @@ pub mod build;
 pub mod config;
 pub mod content;
 pub mod encryption;
+pub mod git;
 pub mod links;
 pub mod markdown;
 pub mod rss;

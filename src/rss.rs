@@ -146,6 +146,7 @@ mod tests {
 
     fn make_test_post(title: &str, description: &str) -> Post {
         use crate::content::{ContentType, Frontmatter};
+        use std::path::PathBuf;
 
         Post {
             file_slug: "test-post".to_string(),
@@ -170,6 +171,7 @@ mod tests {
             encrypted_content: None,
             has_encrypted_blocks: false,
             content_type: ContentType::Markdown,
+            source_path: PathBuf::new(),
         }
     }
 }

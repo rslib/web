@@ -7,6 +7,7 @@ use tera::Tera;
 
 use crate::config::Config;
 use crate::content::{Content, Page, Post};
+use crate::git::{get_file_git_info, register_git_functions};
 use crate::links::{GraphData, LinkGraph};
 
 /// Template engine wrapper
@@ -19,8 +20,10 @@ impl Templates {
         debug!("Loading templates from {:?}", template_dir);
         let template_dir_str = template_dir.to_string_lossy();
         let pattern = format!("{}/**/*.html", template_dir_str);
-        let tera = Tera::new(&pattern)
+        let mut tera = Tera::new(&pattern)
             .with_context(|| format!("Failed to load templates from {}", template_dir_str))?;
+
+        register_git_functions(&mut tera);
 
         let template_count = tera.get_template_names().count();
         debug!("Loaded {} templates", template_count);
@@ -60,6 +63,11 @@ impl Templates {
                 description: post_ctx.description.clone(),
                 url: post_ctx.full_url.clone(),
                 image: post_ctx.image.clone(),
+                git_hash: post_ctx.git_hash.clone(),
+                git_short_hash: post_ctx.git_short_hash.clone(),
+                git_commit_date: post_ctx.git_commit_date,
+                git_author: post_ctx.git_author.clone(),
+                git_is_dirty: post_ctx.git_is_dirty,
             },
         );
 
@@ -159,6 +167,11 @@ impl Templates {
                 description: post_ctx.description.clone(),
                 url: post_ctx.full_url.clone(),
                 image: post_ctx.image.clone(),
+                git_hash: post_ctx.git_hash.clone(),
+                git_short_hash: post_ctx.git_short_hash.clone(),
+                git_commit_date: post_ctx.git_commit_date,
+                git_author: post_ctx.git_author.clone(),
+                git_is_dirty: post_ctx.git_is_dirty,
             },
         );
 
@@ -230,6 +243,11 @@ impl Templates {
                 description: "Knowledge graph".to_string(),
                 url: format!("{}/{}/", config.site.base_url, config.graph.path),
                 image: None,
+                git_hash: None,
+                git_short_hash: None,
+                git_commit_date: None,
+                git_author: None,
+                git_is_dirty: false,
             },
         );
         context.insert("graph", graph_data);
@@ -274,6 +292,16 @@ struct PageContext {
     description: String,
     url: String,
     image: Option<String>,
+    /// Git hash of last commit that modified this file
+    git_hash: Option<String>,
+    /// Short git hash (7 chars)
+    git_short_hash: Option<String>,
+    /// Timestamp of last commit that modified this file
+    git_commit_date: Option<i64>,
+    /// Author of last commit that modified this file
+    git_author: Option<String>,
+    /// Whether file has uncommitted changes
+    git_is_dirty: bool,
 }
 
 #[derive(Serialize)]
@@ -291,6 +319,12 @@ struct BacklinkContext {
 
 impl PageContext {
     fn from_page(config: &Config, page: &Page) -> Self {
+        let git_info = if page.source_path.as_os_str().is_empty() {
+            crate::git::FileGitInfo::default()
+        } else {
+            get_file_git_info(&page.source_path)
+        };
+
         Self {
             title: page.frontmatter.title.clone(),
             description: page
@@ -304,6 +338,11 @@ impl PageContext {
                 .image
                 .clone()
                 .or_else(|| config.seo.default_og_image.clone()),
+            git_hash: git_info.hash,
+            git_short_hash: git_info.short_hash,
+            git_commit_date: git_info.commit_date,
+            git_author: git_info.author,
+            git_is_dirty: git_info.is_dirty,
         }
     }
 }
@@ -318,6 +357,7 @@ struct PostContext {
     section: String,
     date: Option<String>,
     date_iso: Option<String>,
+    date_timestamp: Option<i64>,
     tags: Vec<String>,
     image: Option<String>,
     reading_time: u32,
@@ -332,6 +372,16 @@ struct PostContext {
     salt: Option<String>,
     /// Base64-encoded nonce (only if encrypted)
     nonce: Option<String>,
+    /// Git hash of last commit that modified this file
+    git_hash: Option<String>,
+    /// Short git hash (7 chars)
+    git_short_hash: Option<String>,
+    /// Timestamp of last commit that modified this file
+    git_commit_date: Option<i64>,
+    /// Author of last commit that modified this file
+    git_author: Option<String>,
+    /// Whether file has uncommitted changes
+    git_is_dirty: bool,
 }
 
 impl PostContext {
@@ -365,6 +415,10 @@ impl PostContext {
                 .frontmatter
                 .date
                 .map(|d| d.format("%Y-%m-%d").to_string()),
+            date_timestamp: post
+                .frontmatter
+                .date
+                .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()),
             tags: post.frontmatter.tags.clone().unwrap_or_default(),
             image: post
                 .frontmatter
@@ -378,6 +432,25 @@ impl PostContext {
             ciphertext,
             salt,
             nonce,
+            git_hash: None,
+            git_short_hash: None,
+            git_commit_date: None,
+            git_author: None,
+            git_is_dirty: false,
         }
+        .with_git_info(&post.source_path)
+    }
+
+    fn with_git_info(mut self, source_path: &std::path::Path) -> Self {
+        if source_path.as_os_str().is_empty() {
+            return self;
+        }
+        let git_info = get_file_git_info(source_path);
+        self.git_hash = git_info.hash;
+        self.git_short_hash = git_info.short_hash;
+        self.git_commit_date = git_info.commit_date;
+        self.git_author = git_info.author;
+        self.git_is_dirty = git_info.is_dirty;
+        self
     }
 }

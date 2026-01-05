@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::frontmatter::{Frontmatter, parse_frontmatter};
 
@@ -10,6 +10,8 @@ pub struct Page {
     pub html: String,
     /// The file stem (e.g., "404" from "404.md") for output naming
     pub file_slug: Option<String>,
+    /// Path to the source file
+    pub source_path: PathBuf,
 }
 
 impl Page {
@@ -30,6 +32,7 @@ impl Page {
             content: content.to_string(),
             html: String::new(), // Will be filled by markdown pipeline
             file_slug,
+            source_path: path.as_ref().to_path_buf(),
         })
     }
 
