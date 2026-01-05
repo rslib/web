@@ -1,6 +1,6 @@
 [package]
 name = "rs-web"
-version = "0.0.6"
+version = "0.0.7"
 edition = "2024"
 description = "A fast, opinionated static site generator with encryption support"
 authors = ["Ray Andrew Sinurat"]
