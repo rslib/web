@@ -141,6 +141,7 @@ mod tests {
             graph: Default::default(),
             rss: Default::default(),
             text: Default::default(),
+            sections: Default::default(),
         }
     }
 
@@ -172,6 +173,7 @@ mod tests {
             has_encrypted_blocks: false,
             content_type: ContentType::Markdown,
             source_path: PathBuf::new(),
+            source_dir: None,
         }
     }
 }

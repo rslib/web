@@ -9,7 +9,7 @@ pub use post::{ContentType, Post};
 #[cfg(test)]
 pub use frontmatter::Frontmatter;
 
-use crate::config::PathsConfig;
+use crate::config::{PathsConfig, SectionsConfig};
 use anyhow::Result;
 use ignore::WalkBuilder;
 use log::{debug, trace};
@@ -77,7 +77,11 @@ pub struct Content {
 
 /// Discover all content files based on paths config
 /// If base_dir is provided, paths are resolved relative to it
-pub fn discover_content(paths: &PathsConfig, base_dir: Option<&Path>) -> Result<Content> {
+pub fn discover_content(
+    paths: &PathsConfig,
+    sections_config: &SectionsConfig,
+    base_dir: Option<&Path>,
+) -> Result<Content> {
     debug!("Discovering content from {:?}", paths.content);
     let content_path = Path::new(&paths.content);
     let content_dir = if let Some(base) = base_dir {
@@ -197,6 +201,7 @@ pub fn discover_content(paths: &PathsConfig, base_dir: Option<&Path>) -> Result<
             &exclude_matcher,
             &mut sections,
             paths,
+            sections_config,
         )?;
     }
 
@@ -219,6 +224,7 @@ fn process_section(
     exclude_matcher: &ExcludeMatcher,
     sections: &mut HashMap<String, Section>,
     paths: &PathsConfig,
+    sections_config: &SectionsConfig,
 ) -> Result<()> {
     let section_name = path
         .file_name()
@@ -237,6 +243,58 @@ fn process_section(
 
     trace!("Processing section: {}", section_name);
 
+    // Check if this section uses directory iteration
+    let iterate_mode = sections_config
+        .sections
+        .get(&section_name)
+        .map(|c| c.iterate.as_str())
+        .unwrap_or("files");
+
+    let mut posts = if iterate_mode == "directories" {
+        // Directory-based iteration: each subdirectory becomes a post
+        process_section_directories(path, &section_name, exclude_matcher, paths)?
+    } else {
+        // File-based iteration (default): find .md/.html files
+        process_section_files(path, &section_name, exclude_matcher, paths)?
+    };
+
+    // Sort posts by date (newest first), then by slug for undated posts
+    posts.sort_by(|a, b| match (&b.frontmatter.date, &a.frontmatter.date) {
+        (Some(d1), Some(d2)) => d1.cmp(d2),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.slug().cmp(b.slug()),
+    });
+
+    if !posts.is_empty() {
+        debug!(
+            "Section '{}': {} posts loaded (mode: {})",
+            section_name,
+            posts.len(),
+            iterate_mode
+        );
+        sections.insert(
+            section_name.clone(),
+            Section {
+                name: section_name,
+                posts,
+            },
+        );
+    } else {
+        trace!("Section '{}': no posts found", section_name);
+    }
+
+    Ok(())
+}
+
+/// Process section using file-based iteration (default)
+/// Finds .md/.html files directly in the section directory
+fn process_section_files(
+    path: &Path,
+    section_name: &str,
+    exclude_matcher: &ExcludeMatcher,
+    paths: &PathsConfig,
+) -> Result<Vec<Post>> {
     // Collect content file paths (markdown and HTML) using appropriate walker
     let post_paths: Vec<_> = if paths.respect_gitignore {
         WalkBuilder::new(path)
@@ -271,30 +329,100 @@ fn process_section(
             .collect()
     };
 
-    // Load posts (can be parallelized with rayon if needed)
+    // Load posts
     let mut posts = Vec::new();
     for post_path in post_paths {
-        let post = Post::from_file_with_section(&post_path, &section_name)?;
+        let post = Post::from_file_with_section(&post_path, section_name)?;
         if !post.frontmatter.draft.unwrap_or(false) {
             posts.push(post);
         }
     }
 
-    // Sort posts by date (newest first)
-    posts.sort_by(|a, b| b.frontmatter.date.cmp(&a.frontmatter.date));
+    Ok(posts)
+}
 
-    if !posts.is_empty() {
-        debug!("Section '{}': {} posts loaded", section_name, posts.len());
-        sections.insert(
-            section_name.clone(),
-            Section {
-                name: section_name,
-                posts,
-            },
-        );
+/// Process section using directory-based iteration
+/// Each subdirectory becomes a post with source_dir set
+fn process_section_directories(
+    path: &Path,
+    section_name: &str,
+    exclude_matcher: &ExcludeMatcher,
+    paths: &PathsConfig,
+) -> Result<Vec<Post>> {
+    use crate::content::frontmatter::Frontmatter;
+    use crate::content::post::ContentType;
+
+    // Collect subdirectory paths
+    let dir_paths: Vec<_> = if paths.respect_gitignore {
+        WalkBuilder::new(path)
+            .max_depth(Some(1))
+            .hidden(false)
+            .build()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let dir_name = e.path().file_name().and_then(|n| n.to_str()).unwrap_or("");
+                e.depth() == 1 && e.path().is_dir() && !exclude_matcher.is_excluded(dir_name)
+            })
+            .map(|e| e.into_path())
+            .collect()
     } else {
-        trace!("Section '{}': no posts found", section_name);
+        WalkDir::new(path)
+            .min_depth(1)
+            .max_depth(1)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let dir_name = e.path().file_name().and_then(|n| n.to_str()).unwrap_or("");
+                e.path().is_dir() && !exclude_matcher.is_excluded(dir_name)
+            })
+            .map(|e| e.into_path())
+            .collect()
+    };
+
+    let mut posts = Vec::new();
+    for dir_path in dir_paths {
+        let slug = dir_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("untitled")
+            .to_string();
+
+        trace!(
+            "Creating directory-based post: {} in section {}",
+            slug, section_name
+        );
+
+        // Create a minimal Post with source_dir set
+        // Templates will use Tera functions to load data from the directory
+        let post = Post {
+            file_slug: slug.clone(),
+            section: section_name.to_string(),
+            frontmatter: Frontmatter {
+                title: slug.clone(), // Default title is the directory name
+                description: None,
+                date: None,
+                tags: None,
+                draft: None,
+                image: None,
+                template: None,
+                slug: Some(slug),
+                permalink: None,
+                encrypted: false,
+                password: None,
+            },
+            content: String::new(),
+            html: String::new(),
+            reading_time: 0,
+            word_count: 0,
+            encrypted_content: None,
+            has_encrypted_blocks: false,
+            content_type: ContentType::Markdown,
+            source_path: dir_path.clone(),
+            source_dir: Some(dir_path),
+        };
+
+        posts.push(post);
     }
 
-    Ok(())
+    Ok(posts)
 }

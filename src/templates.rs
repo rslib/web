@@ -7,6 +7,7 @@ use tera::Tera;
 
 use crate::config::Config;
 use crate::content::{Content, Page, Post};
+use crate::data::register_data_functions;
 use crate::git::{get_file_git_info, register_git_functions};
 use crate::links::{GraphData, LinkGraph};
 
@@ -24,6 +25,7 @@ impl Templates {
             .with_context(|| format!("Failed to load templates from {}", template_dir_str))?;
 
         register_git_functions(&mut tera);
+        register_data_functions(&mut tera);
 
         let template_count = tera.get_template_names().count();
         debug!("Loaded {} templates", template_count);
@@ -382,6 +384,9 @@ struct PostContext {
     git_author: Option<String>,
     /// Whether file has uncommitted changes
     git_is_dirty: bool,
+    /// Source directory path (for directory-based posts)
+    /// Used with Tera functions to load files from the directory
+    source_dir: Option<String>,
 }
 
 impl PostContext {
@@ -437,6 +442,10 @@ impl PostContext {
             git_commit_date: None,
             git_author: None,
             git_is_dirty: false,
+            source_dir: post
+                .source_dir
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
         }
         .with_git_info(&post.source_path)
     }

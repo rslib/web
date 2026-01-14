@@ -197,6 +197,7 @@ pub mod assets;
 pub mod build;
 pub mod config;
 pub mod content;
+pub mod data;
 pub mod encryption;
 pub mod git;
 pub mod links;

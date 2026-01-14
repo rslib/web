@@ -121,7 +121,11 @@ impl Builder {
     }
 
     fn load_content(&self) -> Result<Content> {
-        discover_content(&self.config.paths, Some(&self.project_dir))
+        discover_content(
+            &self.config.paths,
+            &self.config.sections,
+            Some(&self.project_dir),
+        )
     }
 
     fn process_assets(&self) -> Result<()> {

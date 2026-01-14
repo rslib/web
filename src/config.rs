@@ -25,6 +25,8 @@ pub struct Config {
     pub rss: RssConfig,
     #[serde(default)]
     pub text: TextConfig,
+    #[serde(default)]
+    pub sections: SectionsConfig,
 }
 
 /// RSS feed config
@@ -140,6 +142,36 @@ pub struct TemplatesConfig {
 pub struct PermalinksConfig {
     #[serde(flatten)]
     pub sections: HashMap<String, String>,
+}
+
+/// Section-specific configuration
+/// Allows customizing how each section discovers and processes content
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct SectionsConfig {
+    #[serde(flatten)]
+    pub sections: HashMap<String, SectionConfig>,
+}
+
+/// Configuration for a single section
+#[derive(Debug, Deserialize, Clone)]
+pub struct SectionConfig {
+    /// How to iterate content: "files" (default) or "directories"
+    /// - "files": Look for .md/.html files (default behavior)
+    /// - "directories": Each subdirectory becomes a post with source_dir
+    #[serde(default = "default_iterate")]
+    pub iterate: String,
+}
+
+impl Default for SectionConfig {
+    fn default() -> Self {
+        Self {
+            iterate: default_iterate(),
+        }
+    }
+}
+
+fn default_iterate() -> String {
+    "files".to_string()
 }
 
 /// Encryption config for password-protected posts
@@ -565,5 +597,28 @@ enabled = true
         assert!(config.text.sections.is_empty()); // All sections
         assert!(!config.text.exclude_encrypted);
         assert!(config.text.include_home);
+    }
+
+    #[test]
+    fn test_config_with_sections() {
+        let content = format!(
+            r#"{}
+[sections.problems]
+iterate = "directories"
+
+[sections.blog]
+iterate = "files"
+"#,
+            minimal_config()
+        );
+
+        let config = Config::from_str(&content).unwrap();
+        let problems = config.sections.sections.get("problems");
+        assert!(problems.is_some());
+        assert_eq!(problems.unwrap().iterate, "directories");
+
+        let blog = config.sections.sections.get("blog");
+        assert!(blog.is_some());
+        assert_eq!(blog.unwrap().iterate, "files");
     }
 }

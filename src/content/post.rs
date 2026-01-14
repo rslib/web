@@ -32,6 +32,10 @@ pub struct Post {
     pub content_type: ContentType,
     /// Path to the source file
     pub source_path: PathBuf,
+    /// Path to the source directory (for directory-based posts)
+    /// This is set when iterate = "directories" and allows templates to access
+    /// the full directory path for loading additional files via Tera functions
+    pub source_dir: Option<PathBuf>,
 }
 
 impl Post {
@@ -77,6 +81,7 @@ impl Post {
             has_encrypted_blocks: false, // Will be set if :::encrypted blocks found
             content_type,
             source_path: path.to_path_buf(),
+            source_dir: None, // Set by caller for directory-based posts
         })
     }
 
@@ -180,6 +185,7 @@ mod tests {
             has_encrypted_blocks: false,
             content_type: ContentType::Markdown,
             source_path: PathBuf::new(),
+            source_dir: None,
         }
     }
 
@@ -228,6 +234,7 @@ mod tests {
             graph: Default::default(),
             rss: Default::default(),
             text: Default::default(),
+            sections: Default::default(),
         }
     }
 

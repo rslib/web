@@ -39,6 +39,8 @@ minifier = "0.3"
 # File operations
 walkdir = "2.5"
 ignore = "0.4"
+glob = "0.3"
+dirs = "5.0"
 
 # Error handling
 thiserror = "2.0"
@@ -70,6 +72,9 @@ notify-debouncer-mini = "0.4"
 
 # Git metadata
 git2 = { version = "0.19", default-features = false }
+
+[dev-dependencies]
+tempfile = "3.14"
 
 [profile.release]
 lto = true
