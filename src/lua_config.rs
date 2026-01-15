@@ -550,6 +550,262 @@ fn register_lua_functions(lua: &Lua, project_root: &Path, sandbox: bool) -> mlua
     })?;
     globals.set("print", print_fn)?;
 
+    // Register async/await style helpers using coroutines
+    register_async_helpers(lua)?;
+
+    // Register parallel processing functions
+    register_parallel_functions(lua, project_root, sandbox)?;
+
+    Ok(())
+}
+
+/// Register async/await style helpers for coroutine-based concurrency
+fn register_async_helpers(lua: &Lua) -> mlua::Result<()> {
+    // Create async module
+    let async_code = r#"
+        local async = {}
+
+        -- Create a task from a function (wraps in coroutine)
+        function async.task(fn)
+            return {
+                _co = coroutine.create(fn),
+                _completed = false,
+                _result = nil,
+            }
+        end
+
+        -- Run a task to completion
+        function async.await(task)
+            if task._completed then
+                return task._result
+            end
+            while coroutine.status(task._co) ~= "dead" do
+                local ok, result = coroutine.resume(task._co)
+                if not ok then
+                    error(result)
+                end
+                task._result = result
+            end
+            task._completed = true
+            return task._result
+        end
+
+        -- Yield from current task (for cooperative multitasking)
+        function async.yield(value)
+            return coroutine.yield(value)
+        end
+
+        -- Run multiple tasks concurrently (interleaved execution)
+        function async.all(tasks)
+            local results = {}
+            local pending = {}
+
+            for i, task in ipairs(tasks) do
+                pending[i] = task
+                results[i] = nil
+            end
+
+            -- Round-robin execution until all complete
+            local any_pending = true
+            while any_pending do
+                any_pending = false
+                for i, task in ipairs(pending) do
+                    if task and coroutine.status(task._co) ~= "dead" then
+                        any_pending = true
+                        local ok, result = coroutine.resume(task._co)
+                        if not ok then
+                            error(result)
+                        end
+                        task._result = result
+                    elseif task then
+                        results[i] = task._result
+                        task._completed = true
+                        pending[i] = nil
+                    end
+                end
+            end
+
+            return results
+        end
+
+        -- Run tasks and return first completed result
+        function async.race(tasks)
+            while true do
+                for i, task in ipairs(tasks) do
+                    if coroutine.status(task._co) ~= "dead" then
+                        local ok, result = coroutine.resume(task._co)
+                        if not ok then
+                            error(result)
+                        end
+                        if coroutine.status(task._co) == "dead" then
+                            task._result = result
+                            task._completed = true
+                            return result, i
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Sleep/delay (yields N times for cooperative scheduling)
+        function async.sleep(n)
+            for _ = 1, (n or 1) do
+                coroutine.yield()
+            end
+        end
+
+        return async
+    "#;
+
+    let async_module: Table = lua.load(async_code).eval()?;
+    lua.globals().set("async", async_module)?;
+
+    Ok(())
+}
+
+/// Register parallel processing functions
+fn register_parallel_functions(lua: &Lua, project_root: &Path, sandbox: bool) -> mlua::Result<()> {
+    let parallel = lua.create_table()?;
+    let root = project_root.to_path_buf();
+
+    // parallel.load_json(paths) - Load multiple JSON files in parallel
+    let root_clone = root.clone();
+    let load_json_parallel = lua.create_function(move |lua, paths: Table| {
+        use rayon::prelude::*;
+
+        // Collect paths from Lua table
+        let path_list: Vec<String> = paths
+            .sequence_values::<String>()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // Process in parallel
+        let results: Vec<Option<serde_json::Value>> = path_list
+            .par_iter()
+            .map(|path| {
+                let resolved = resolve_path(path, &root_clone);
+                if sandbox && !is_path_within_root(&resolved, &root_clone) {
+                    return None;
+                }
+                std::fs::read_to_string(&resolved)
+                    .ok()
+                    .and_then(|content| serde_json::from_str(&content).ok())
+            })
+            .collect();
+
+        // Convert results back to Lua table
+        let result_table = lua.create_table()?;
+        for (i, result) in results.into_iter().enumerate() {
+            match result {
+                Some(v) => result_table.set(i + 1, lua.to_value(&v)?)?,
+                None => result_table.set(i + 1, Value::Nil)?,
+            }
+        }
+        Ok(result_table)
+    })?;
+    parallel.set("load_json", load_json_parallel)?;
+
+    // parallel.read_files(paths) - Read multiple files in parallel
+    let root_clone = root.clone();
+    let read_files_parallel = lua.create_function(move |lua, paths: Table| {
+        use rayon::prelude::*;
+
+        let path_list: Vec<String> = paths
+            .sequence_values::<String>()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let results: Vec<Option<String>> = path_list
+            .par_iter()
+            .map(|path| {
+                let resolved = resolve_path(path, &root_clone);
+                if sandbox && !is_path_within_root(&resolved, &root_clone) {
+                    return None;
+                }
+                std::fs::read_to_string(&resolved).ok()
+            })
+            .collect();
+
+        let result_table = lua.create_table()?;
+        for (i, result) in results.into_iter().enumerate() {
+            match result {
+                Some(content) => result_table.set(i + 1, lua.create_string(&content)?)?,
+                None => result_table.set(i + 1, Value::Nil)?,
+            }
+        }
+        Ok(result_table)
+    })?;
+    parallel.set("read_files", read_files_parallel)?;
+
+    // parallel.file_exists(paths) - Check multiple files exist in parallel
+    let root_clone = root.clone();
+    let file_exists_parallel = lua.create_function(move |lua, paths: Table| {
+        use rayon::prelude::*;
+
+        let path_list: Vec<String> = paths
+            .sequence_values::<String>()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let results: Vec<bool> = path_list
+            .par_iter()
+            .map(|path| {
+                let resolved = resolve_path(path, &root_clone);
+                if sandbox && !is_path_within_root(&resolved, &root_clone) {
+                    return false;
+                }
+                resolved.exists()
+            })
+            .collect();
+
+        let result_table = lua.create_table()?;
+        for (i, exists) in results.into_iter().enumerate() {
+            result_table.set(i + 1, exists)?;
+        }
+        Ok(result_table)
+    })?;
+    parallel.set("file_exists", file_exists_parallel)?;
+
+    // parallel.map(items, fn) - Map over items, calling Lua function (sequential fn calls, parallel-ready structure)
+    let map_fn = lua.create_function(|lua, (items, func): (Table, Function)| {
+        let result_table = lua.create_table()?;
+        let mut i = 1;
+        for v in items.sequence_values::<Value>().flatten() {
+            let res: Value = func.call(v)?;
+            result_table.set(i, res)?;
+            i += 1;
+        }
+        Ok(result_table)
+    })?;
+    parallel.set("map", map_fn)?;
+
+    // parallel.filter(items, fn) - Filter items using predicate function
+    let filter_fn = lua.create_function(|lua, (items, func): (Table, Function)| {
+        let result_table = lua.create_table()?;
+        let mut i = 1;
+        for v in items.sequence_values::<Value>().flatten() {
+            let keep: bool = func.call(v.clone())?;
+            if keep {
+                result_table.set(i, v)?;
+                i += 1;
+            }
+        }
+        Ok(result_table)
+    })?;
+    parallel.set("filter", filter_fn)?;
+
+    // parallel.reduce(items, initial, fn) - Reduce items to single value
+    let reduce_fn =
+        lua.create_function(|_, (items, initial, func): (Table, Value, Function)| {
+            let mut acc = initial;
+            for v in items.sequence_values::<Value>().flatten() {
+                acc = func.call((acc, v))?;
+            }
+            Ok(acc)
+        })?;
+    parallel.set("reduce", reduce_fn)?;
+
+    lua.globals().set("parallel", parallel)?;
     Ok(())
 }
 

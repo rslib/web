@@ -142,6 +142,51 @@ Available in `config.lua`:
 
 **Note:** All file operations respect the sandbox setting. Paths can be relative (resolved from project root) or absolute.
 
+#### Async/Await Helpers
+
+Coroutine-based cooperative multitasking with a cleaner API:
+
+```lua
+-- Create and run tasks
+local task1 = async.task(function()
+  local data = load_json("file1.json")
+  async.yield()  -- cooperative yield
+  return data
+end)
+
+-- Run single task to completion
+local result = async.await(task1)
+
+-- Run multiple tasks (interleaved execution)
+local results = async.all({task1, task2, task3})
+
+-- Race: return first completed
+local winner, index = async.race({task1, task2})
+```
+
+#### Parallel Processing
+
+True parallel execution using Rust's rayon thread pool:
+
+```lua
+-- Load multiple JSON files in parallel (I/O parallelism)
+local configs = parallel.load_json({
+  "content/problems/two-sum/config.json",
+  "content/problems/reverse-string/config.json",
+})
+
+-- Read multiple files in parallel
+local contents = parallel.read_files({"a.txt", "b.txt", "c.txt"})
+
+-- Check multiple files exist in parallel
+local exists = parallel.file_exists({"a.txt", "b.txt"})
+
+-- Functional helpers (sequential but convenient)
+local doubled = parallel.map(items, function(x) return x * 2 end)
+local evens = parallel.filter(items, function(x) return x % 2 == 0 end)
+local sum = parallel.reduce(items, 0, function(acc, x) return acc + x end)
+```
+
 ### TOML Configuration (config.toml)
 
 ### Required Settings
