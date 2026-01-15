@@ -60,7 +60,7 @@ impl ExcludeMatcher {
 }
 
 /// A section is a subdirectory containing posts (e.g., blog, projects, notes)
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct Section {
     pub name: String,
     pub posts: Vec<Post>,

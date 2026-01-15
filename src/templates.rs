@@ -108,7 +108,13 @@ impl Templates {
     }
 
     /// Render the home page
-    pub fn render_home(&self, config: &Config, page: &Page, content: &Content) -> Result<String> {
+    pub fn render_home(
+        &self,
+        config: &Config,
+        page: &Page,
+        content: &Content,
+        computed: Option<&serde_json::Value>,
+    ) -> Result<String> {
         let mut context = tera::Context::new();
 
         // Site info
@@ -139,6 +145,11 @@ impl Templates {
 
         // Page content
         context.insert("content", &page.html);
+
+        // Computed data from Lua config (if available)
+        if let Some(computed) = computed {
+            context.insert("computed", computed);
+        }
 
         self.tera
             .render("home.html", &context)
@@ -207,7 +218,13 @@ impl Templates {
     }
 
     /// Render a root page (like 404.md, about.md)
-    pub fn render_root_page(&self, config: &Config, page: &Page) -> Result<String> {
+    pub fn render_root_page(
+        &self,
+        config: &Config,
+        page: &Page,
+        content: &Content,
+        computed: Option<&serde_json::Value>,
+    ) -> Result<String> {
         let mut context = tera::Context::new();
 
         // Site info
@@ -218,6 +235,31 @@ impl Templates {
 
         // Page content
         context.insert("content", &page.html);
+
+        // All sections with their posts (useful for pages like tags.html)
+        let sections_ctx: HashMap<String, SectionContext> = content
+            .sections
+            .iter()
+            .map(|(name, section)| {
+                (
+                    name.clone(),
+                    SectionContext {
+                        name: section.name.clone(),
+                        posts: section
+                            .posts
+                            .iter()
+                            .map(|p| PostContext::from_post(config, p))
+                            .collect(),
+                    },
+                )
+            })
+            .collect();
+        context.insert("sections", &sections_ctx);
+
+        // Computed data from Lua config (if available)
+        if let Some(computed) = computed {
+            context.insert("computed", computed);
+        }
 
         // Use frontmatter template if specified, otherwise default to "page.html"
         let template = page
@@ -230,6 +272,50 @@ impl Templates {
             format!(
                 "Failed to render root page: {} with template: {}",
                 page.frontmatter.title, template
+            )
+        })
+    }
+
+    /// Render a computed page (dynamically generated from Lua)
+    pub fn render_computed_page(
+        &self,
+        config: &Config,
+        page: &crate::lua_config::ComputedPage,
+        computed: Option<&serde_json::Value>,
+    ) -> Result<String> {
+        let mut context = tera::Context::new();
+
+        // Site info
+        context.insert("site", &SiteContext::from(config));
+
+        // Page info
+        context.insert(
+            "page",
+            &PageContext {
+                title: page.title.clone(),
+                description: String::new(),
+                url: format!("{}{}", config.site.base_url, page.path),
+                image: None,
+                git_hash: None,
+                git_short_hash: None,
+                git_commit_date: None,
+                git_author: None,
+                git_is_dirty: false,
+            },
+        );
+
+        // Custom data from Lua
+        context.insert("data", &page.data);
+
+        // Computed data (if available)
+        if let Some(computed) = computed {
+            context.insert("computed", computed);
+        }
+
+        self.tera.render(&page.template, &context).with_context(|| {
+            format!(
+                "Failed to render computed page '{}' with template '{}'",
+                page.path, page.template
             )
         })
     }

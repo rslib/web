@@ -136,7 +136,8 @@ pub struct FileGitInfo {
     pub is_dirty: bool,
 }
 
-/// Get git info for a specific file (last commit that modified it)
+/// Get git info for a specific file or directory (last commit that modified it)
+/// For directories, finds the most recent commit that modified any file within
 pub fn get_file_git_info(path: &Path) -> FileGitInfo {
     let repo = match Repository::discover(".") {
         Ok(r) => r,
@@ -154,13 +155,27 @@ pub fn get_file_git_info(path: &Path) -> FileGitInfo {
         Err(_) => path,
     };
 
-    // Check if file has uncommitted changes
-    let is_dirty = repo
-        .status_file(relative_path)
-        .map(|s| !s.is_empty())
-        .unwrap_or(false);
+    let is_directory = path.is_dir();
 
-    // Use git log to find the last commit that modified this file
+    // Check if file/directory has uncommitted changes
+    let is_dirty = if is_directory {
+        // For directories, check if any file within has changes
+        repo.statuses(None)
+            .map(|statuses| {
+                statuses.iter().any(|s| {
+                    s.path()
+                        .map(|p| Path::new(p).starts_with(relative_path))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    } else {
+        repo.status_file(relative_path)
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+    };
+
+    // Use git log to find the last commit that modified this file/directory
     let mut revwalk = match repo.revwalk() {
         Ok(r) => r,
         Err(_) => return FileGitInfo::default(),
@@ -176,7 +191,7 @@ pub fn get_file_git_info(path: &Path) -> FileGitInfo {
             Err(_) => continue,
         };
 
-        // Check if this commit modified our file
+        // Check if this commit modified our file/directory
         let tree = match commit.tree() {
             Ok(t) => t,
             Err(_) => continue,
@@ -190,20 +205,37 @@ pub fn get_file_git_info(path: &Path) -> FileGitInfo {
             Err(_) => continue,
         };
 
-        let file_changed = diff.deltas().any(|delta| {
-            delta
-                .new_file()
-                .path()
-                .map(|p| p == relative_path)
-                .unwrap_or(false)
-                || delta
-                    .old_file()
+        let path_changed = if is_directory {
+            // For directories, check if any file within the directory was changed
+            diff.deltas().any(|delta| {
+                delta
+                    .new_file()
+                    .path()
+                    .map(|p| p.starts_with(relative_path))
+                    .unwrap_or(false)
+                    || delta
+                        .old_file()
+                        .path()
+                        .map(|p| p.starts_with(relative_path))
+                        .unwrap_or(false)
+            })
+        } else {
+            // For files, exact match
+            diff.deltas().any(|delta| {
+                delta
+                    .new_file()
                     .path()
                     .map(|p| p == relative_path)
                     .unwrap_or(false)
-        });
+                    || delta
+                        .old_file()
+                        .path()
+                        .map(|p| p == relative_path)
+                        .unwrap_or(false)
+            })
+        };
 
-        if file_changed {
+        if path_changed {
             let hash = oid.to_string();
             let short_hash = hash[..7].to_string();
             let commit_date = commit.time().seconds();

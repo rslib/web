@@ -53,7 +53,96 @@ RS_WEB_LOG_LEVEL=debug rs-web build
 
 ## Configuration
 
-Configure via `config.toml`:
+Configure via `config.lua` (recommended) or `config.toml`:
+
+### Lua Configuration (config.lua)
+
+Lua configuration provides more power with computed data, dynamic pages, and build hooks:
+
+```lua
+return {
+  site = {
+    title = "My Site",
+    description = "Site description",
+    base_url = "https://example.com",
+    author = "Your Name",
+  },
+
+  build = {
+    output_dir = "dist",
+    minify_css = true,
+  },
+
+  -- Computed data available in templates as {{ computed.tags }}
+  computed = {
+    tags = function(sections)
+      -- Process sections and return data for templates
+      return { ... }
+    end,
+  },
+
+  -- Generate dynamic pages (e.g., /tags/array/, /tags/string/)
+  computed_pages = function(sections)
+    return {
+      { path = "/tags/array/", template = "tag.html", title = "Array", data = {...} },
+    }
+  end,
+
+  -- Custom Tera filters: {{ value | my_filter }}
+  filters = {
+    shout = function(s) return s:upper() .. "!" end,
+  },
+
+  -- Build hooks
+  hooks = {
+    before_build = function()
+      print("Starting build...")
+    end,
+    after_build = function()
+      print("Build complete!")
+    end,
+  },
+}
+```
+
+#### Lua Sandbox
+
+By default, Lua file operations are sandboxed to the project directory (where `config.lua` is located). This prevents accidental or malicious access to files outside your project.
+
+```lua
+return {
+  -- Sandbox is enabled by default. Set to false to allow access outside project directory.
+  lua = {
+    sandbox = false,  -- Disable sandbox (use with caution)
+  },
+
+  site = { ... },
+}
+```
+
+When sandbox is enabled:
+- File operations (`read_file`, `write_file`, `load_json`, etc.) only work within the project directory
+- Attempting to access files outside returns an error with a helpful message
+- Relative paths are resolved from the project root
+
+#### Lua API Functions
+
+Available in `config.lua`:
+
+| Function | Description |
+|----------|-------------|
+| `read_file(path)` | Read file contents, returns nil if not found |
+| `write_file(path, content)` | Write content to file, returns true/false |
+| `file_exists(path)` | Check if file exists |
+| `list_files(path, pattern?)` | List files matching glob pattern |
+| `list_dirs(path)` | List subdirectories |
+| `load_json(path)` | Load and parse JSON file |
+| `env(name)` | Get environment variable |
+| `print(...)` | Log output to build log |
+
+**Note:** All file operations respect the sandbox setting. Paths can be relative (resolved from project root) or absolute.
+
+### TOML Configuration (config.toml)
 
 ### Required Settings
 

@@ -50,7 +50,7 @@ struct Cli {
 enum Commands {
     /// Build the static site
     Build {
-        /// Project directory containing config.toml
+        /// Project directory containing config.lua or config.toml
         #[arg(short = 'd', long = "dir")]
         directory: Option<PathBuf>,
 
@@ -111,9 +111,14 @@ fn main() -> Result<()> {
             let project_dir = directory.unwrap_or_else(|| PathBuf::from("."));
             let project_dir = project_dir.canonicalize().unwrap_or(project_dir);
 
-            // Config path is relative to project directory
-            let config_path = project_dir.join("config.toml");
-            let config = Config::load(&config_path)?;
+            // Load config from project directory (supports both config.lua and config.toml)
+            let (mut config, lua_config) = Config::load_with_lua(&project_dir)?;
+
+            // Allow overriding base_url via environment variable (useful for CI/CD)
+            if let Ok(base_url) = std::env::var("SITE_BASE_URL") {
+                log::info!("Using base_url from SITE_BASE_URL: {}", base_url);
+                config.site.base_url = base_url;
+            }
 
             // Output directory:
             // - If -o specified: relative to current working directory
@@ -128,7 +133,8 @@ fn main() -> Result<()> {
                 project_dir.join(&config.build.output_dir)
             };
 
-            let mut builder = Builder::new(config, output_dir.clone(), project_dir.clone());
+            let mut builder = Builder::new(config, output_dir.clone(), project_dir.clone())
+                .with_lua_config(lua_config);
 
             // Initial build
             builder.build()?;

@@ -3,6 +3,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::lua_config::LuaConfig;
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub site: SiteConfig,
@@ -299,17 +301,63 @@ fn default_scale_factor() -> f64 {
 }
 
 impl Config {
+    /// Load config from a file (Lua or TOML)
+    /// If path has .lua extension, loads as Lua
+    /// If path has .toml extension, loads as TOML
+    /// If path is a directory, looks for config.lua first, then config.toml
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let content = std::fs::read_to_string(path.as_ref())
-            .with_context(|| format!("Failed to read config file: {:?}", path.as_ref()))?;
-
-        let config: Config =
-            toml::from_str(&content).with_context(|| "Failed to parse config file")?;
-
+        let (config, _) = Self::load_with_lua(path)?;
         Ok(config)
     }
 
-    /// Parse config from string (for testing)
+    /// Load config and return both Config and LuaConfig for computed data
+    pub fn load_with_lua<P: AsRef<Path>>(path: P) -> Result<(Self, Option<LuaConfig>)> {
+        let path = path.as_ref();
+
+        // Determine actual config file path
+        let config_path = if path.is_dir() {
+            // Check for config.lua first
+            let lua_path = path.join("config.lua");
+            let toml_path = path.join("config.toml");
+
+            if lua_path.exists() {
+                lua_path
+            } else if toml_path.exists() {
+                toml_path
+            } else {
+                anyhow::bail!(
+                    "No config file found in {:?}. Expected config.lua or config.toml",
+                    path
+                );
+            }
+        } else {
+            path.to_path_buf()
+        };
+
+        // Load based on extension
+        let ext = config_path.extension().and_then(|e| e.to_str());
+        match ext {
+            Some("lua") => {
+                let (config, lua_config) = LuaConfig::load(&config_path)?;
+                Ok((config, Some(lua_config)))
+            }
+            Some("toml") => {
+                let content = std::fs::read_to_string(&config_path)
+                    .with_context(|| format!("Failed to read config file: {:?}", config_path))?;
+                let config: Config =
+                    toml::from_str(&content).with_context(|| "Failed to parse TOML config")?;
+                Ok((config, None))
+            }
+            _ => {
+                anyhow::bail!(
+                    "Unsupported config file extension: {:?}. Expected .lua or .toml",
+                    config_path
+                );
+            }
+        }
+    }
+
+    /// Parse config from TOML string (for testing)
     #[cfg(test)]
     pub fn from_str(content: &str) -> Result<Self> {
         let config: Config = toml::from_str(content).with_context(|| "Failed to parse config")?;

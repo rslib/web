@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use chrono::NaiveDate;
 use serde::{Deserialize, Deserializer};
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, serde::Serialize)]
 pub struct Frontmatter {
     pub title: String,
     pub description: Option<String>,

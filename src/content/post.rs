@@ -6,7 +6,7 @@ use crate::config::Config;
 use crate::encryption::EncryptedContent;
 
 /// Content type of the post source file
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum ContentType {
     /// Markdown file (.md) - processed through markdown pipeline
     Markdown,
@@ -14,7 +14,7 @@ pub enum ContentType {
     Html,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Post {
     /// Slug derived from filename (with date prefix stripped)
     pub file_slug: String,

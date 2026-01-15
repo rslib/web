@@ -12,6 +12,7 @@ use crate::config::Config;
 use crate::content::{Content, ContentType, Post, discover_content};
 use crate::encryption::{encrypt_content, resolve_password};
 use crate::links::LinkGraph;
+use crate::lua_config::{ComputedPage, LuaConfig};
 use crate::markdown::{
     Pipeline, TransformContext, extract_encrypted_blocks, extract_html_encrypted_blocks,
     replace_placeholders,
@@ -24,6 +25,7 @@ use crate::watch::ChangeSet;
 /// Main build orchestrator
 pub struct Builder {
     config: Config,
+    lua_config: Option<LuaConfig>,
     output_dir: PathBuf,
     project_dir: PathBuf,
 }
@@ -32,9 +34,15 @@ impl Builder {
     pub fn new(config: Config, output_dir: PathBuf, project_dir: PathBuf) -> Self {
         Self {
             config,
+            lua_config: None,
             output_dir,
             project_dir,
         }
+    }
+
+    pub fn with_lua_config(mut self, lua_config: Option<LuaConfig>) -> Self {
+        self.lua_config = lua_config;
+        self
     }
 
     /// Resolve a path relative to the project directory
@@ -51,6 +59,12 @@ impl Builder {
         info!("Starting build");
         debug!("Output directory: {:?}", self.output_dir);
         debug!("Project directory: {:?}", self.project_dir);
+
+        // Run before_build hook
+        if let Some(ref lua_config) = self.lua_config {
+            trace!("Running before_build hook");
+            lua_config.call_before_build()?;
+        }
 
         // Stage 1: Clean output directory
         trace!("Stage 1: Cleaning output directory");
@@ -103,6 +117,12 @@ impl Builder {
             total_posts,
             content.sections.len()
         );
+
+        // Run after_build hook
+        if let Some(ref lua_config) = self.lua_config {
+            trace!("Running after_build hook");
+            lua_config.call_after_build()?;
+        }
 
         Ok(())
     }
@@ -436,6 +456,15 @@ impl Builder {
         let link_graph = LinkGraph::build(&self.config, content);
         trace!("Link graph built");
 
+        // Compute data from Lua config (for templates like tags.html)
+        let computed = self.compute_data(content);
+        let computed_ref = if computed.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            None
+        } else {
+            debug!("Computed data available for templates");
+            Some(&computed)
+        };
+
         // Generate graph if enabled
         if self.config.graph.enabled {
             debug!("Generating graph visualization");
@@ -454,15 +483,28 @@ impl Builder {
 
         // Render home page
         if let Some(home_page) = &content.home {
-            let html = templates.render_home(&self.config, home_page, content)?;
+            let html = templates.render_home(&self.config, home_page, content, computed_ref)?;
             fs::write(self.output_dir.join("index.html"), html)?;
         }
 
         // Render root pages (404.md -> 404.html, etc.)
         for page in &content.root_pages {
             if let Some(slug) = &page.file_slug {
-                let html = templates.render_root_page(&self.config, page)?;
+                let html = templates.render_root_page(&self.config, page, content, computed_ref)?;
                 fs::write(self.output_dir.join(format!("{}.html", slug)), html)?;
+            }
+        }
+
+        // Render computed pages (e.g., /tags/array/, /tags/binary-search/)
+        let computed_pages = self.generate_computed_pages(content);
+        if !computed_pages.is_empty() {
+            debug!("Generating {} computed pages", computed_pages.len());
+            for page in &computed_pages {
+                let relative_path = page.path.trim_matches('/');
+                let page_dir = self.output_dir.join(relative_path);
+                fs::create_dir_all(&page_dir)?;
+                let html = templates.render_computed_page(&self.config, page, computed_ref)?;
+                fs::write(page_dir.join("index.html"), html)?;
             }
         }
 
@@ -735,11 +777,75 @@ impl Builder {
 
     /// Reload config from disk
     pub fn reload_config(&mut self) -> Result<()> {
-        let config_path = self.project_dir.join("config.toml");
-        debug!("Reloading config from {:?}", config_path);
-        self.config = crate::config::Config::load(&config_path)?;
+        debug!("Reloading config from {:?}", self.project_dir);
+        let (config, lua_config) = crate::config::Config::load_with_lua(&self.project_dir)?;
+        self.config = config;
+        self.lua_config = lua_config;
         info!("Config reloaded successfully");
         Ok(())
+    }
+
+    /// Generate computed pages from Lua config
+    fn generate_computed_pages(&self, content: &Content) -> Vec<ComputedPage> {
+        if let Some(ref lua_config) = self.lua_config {
+            if !lua_config.has_computed_pages() {
+                return Vec::new();
+            }
+
+            // Serialize sections to JSON for Lua
+            let sections_json = match serde_json::to_string(&content.sections) {
+                Ok(json) => json,
+                Err(e) => {
+                    log::warn!("Failed to serialize sections for computed_pages: {}", e);
+                    return Vec::new();
+                }
+            };
+
+            match lua_config.call_computed_pages(&sections_json) {
+                Ok(pages) => pages,
+                Err(e) => {
+                    log::warn!("Failed to generate computed pages: {}", e);
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Compute computed data from Lua config
+    fn compute_data(&self, content: &Content) -> serde_json::Value {
+        if let Some(ref lua_config) = self.lua_config {
+            let computed_names = lua_config.computed_names();
+            if computed_names.is_empty() {
+                return serde_json::Value::Object(serde_json::Map::new());
+            }
+
+            // Serialize sections to JSON for Lua
+            let sections_json = match serde_json::to_string(&content.sections) {
+                Ok(json) => json,
+                Err(e) => {
+                    log::warn!("Failed to serialize sections for computed: {}", e);
+                    return serde_json::Value::Object(serde_json::Map::new());
+                }
+            };
+
+            let mut computed = serde_json::Map::new();
+            for name in computed_names {
+                match lua_config.call_computed(name, &sections_json) {
+                    Ok(value) => {
+                        computed.insert(name.to_string(), value);
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to compute '{}': {}", name, e);
+                    }
+                }
+            }
+
+            serde_json::Value::Object(computed)
+        } else {
+            serde_json::Value::Object(serde_json::Map::new())
+        }
     }
 
     /// Get a reference to the current config

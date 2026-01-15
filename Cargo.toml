@@ -18,10 +18,18 @@ pulldown-cmark = { version = "0.12", features = ["simd"] }
 tera = { version = "1.20", features = ["date-locale"] }
 
 # Config & serialization
-toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
+toml = "0.8"
+
+# Lua scripting
+mlua = { version = "0.10", features = [
+  "lua54",
+  "vendored",
+  "serialize",
+  "send",
+] }
 
 # Date handling
 chrono = { version = "0.4", features = ["serde"] }

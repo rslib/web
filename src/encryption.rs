@@ -20,7 +20,7 @@ const NONCE_LENGTH: usize = 12;
 const KEY_LENGTH: usize = 32; // AES-256
 
 /// Encrypted content with all data needed for decryption
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct EncryptedContent {
     /// Base64-encoded ciphertext
     pub ciphertext: String,

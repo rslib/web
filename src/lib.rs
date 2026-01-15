@@ -32,7 +32,70 @@
 //!
 //! ## Configuration
 //!
-//! Configure via `config.toml`:
+//! Configure via `config.lua` (recommended) or `config.toml`:
+//!
+//! ### Lua Configuration (config.lua)
+//!
+//! Lua configuration provides computed data, dynamic pages, and build hooks:
+//!
+//! ```lua
+//! return {
+//!   site = {
+//!     title = "My Site",
+//!     description = "Site description",
+//!     base_url = "https://example.com",
+//!     author = "Your Name",
+//!   },
+//!
+//!   -- Computed data available in templates as {{ computed.tags }}
+//!   computed = {
+//!     tags = function(sections) return {...} end,
+//!   },
+//!
+//!   -- Generate dynamic pages
+//!   computed_pages = function(sections)
+//!     return {{ path = "/tags/array/", template = "tag.html", title = "Array", data = {...} }}
+//!   end,
+//!
+//!   -- Custom Tera filters: {{ value | my_filter }}
+//!   filters = {
+//!     shout = function(s) return s:upper() .. "!" end,
+//!   },
+//!
+//!   -- Build hooks
+//!   hooks = {
+//!     before_build = function() print("Starting...") end,
+//!     after_build = function() print("Done!") end,
+//!   },
+//! }
+//! ```
+//!
+//! #### Lua Sandbox
+//!
+//! By default, file operations are sandboxed to the project directory.
+//! To disable (use with caution):
+//!
+//! ```lua
+//! return {
+//!   lua = { sandbox = false },
+//!   site = { ... },
+//! }
+//! ```
+//!
+//! #### Lua API Functions
+//!
+//! - `read_file(path)` - Read file contents
+//! - `write_file(path, content)` - Write content to file
+//! - `file_exists(path)` - Check if file exists
+//! - `list_files(path, pattern?)` - List files matching pattern
+//! - `list_dirs(path)` - List subdirectories
+//! - `load_json(path)` - Load and parse JSON file
+//! - `env(name)` - Get environment variable
+//! - `print(...)` - Log output to build log
+//!
+//! All file operations respect the sandbox setting.
+//!
+//! ### TOML Configuration (config.toml)
 //!
 //! ### Required Settings
 //!
@@ -201,6 +264,7 @@ pub mod data;
 pub mod encryption;
 pub mod git;
 pub mod links;
+pub mod lua_config;
 pub mod markdown;
 pub mod rss;
 pub mod templates;
