@@ -39,6 +39,7 @@ pub struct Config {
     functions: HashMap<String, mlua::RegistryKey>,
     computed_pages: Option<mlua::RegistryKey>,
     sort_fns: HashMap<String, mlua::RegistryKey>,
+    filter_fns: HashMap<String, mlua::RegistryKey>,
     before_build: Option<mlua::RegistryKey>,
     after_build: Option<mlua::RegistryKey>,
 }
@@ -329,6 +330,7 @@ impl Config {
             functions: HashMap::new(),
             computed_pages: None,
             sort_fns: HashMap::new(),
+            filter_fns: HashMap::new(),
             before_build: None,
             after_build: None,
         }
@@ -398,7 +400,8 @@ impl Config {
 
         // Parse the config table
         let mut sort_fns = HashMap::new();
-        let data = parse_config(&lua, &config_table, &mut sort_fns)
+        let mut filter_fns = HashMap::new();
+        let data = parse_config(&lua, &config_table, &mut sort_fns, &mut filter_fns)
             .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
 
         // Extract computed functions
@@ -452,6 +455,7 @@ impl Config {
             functions,
             computed_pages,
             sort_fns,
+            filter_fns,
             before_build,
             after_build,
         })
@@ -527,6 +531,39 @@ impl Config {
             n if n > 0 => std::cmp::Ordering::Greater,
             _ => std::cmp::Ordering::Equal,
         })
+    }
+
+    /// Check if a section has a custom filter function
+    pub fn has_filter_fn(&self, section_name: &str) -> bool {
+        self.filter_fns.contains_key(section_name)
+    }
+
+    /// Call the filter function for a section (returns true to keep, false to exclude)
+    pub fn call_filter_fn(
+        &self,
+        section_name: &str,
+        post_json: &serde_json::Value,
+    ) -> Result<bool> {
+        let key = self
+            .filter_fns
+            .get(section_name)
+            .with_context(|| format!("Filter function for '{}' not found", section_name))?;
+
+        let func: Function = self
+            .lua
+            .registry_value(key)
+            .map_err(|e| anyhow::anyhow!("Failed to get filter function: {}", e))?;
+
+        let post: Value = self
+            .lua
+            .to_value(post_json)
+            .map_err(|e| anyhow::anyhow!("Failed to convert post to Lua: {}", e))?;
+
+        let result: bool = func
+            .call(post)
+            .map_err(|e| anyhow::anyhow!("Filter function failed: {}", e))?;
+
+        Ok(result)
     }
 
     /// Get all computed function names
@@ -1178,6 +1215,7 @@ fn parse_config(
     lua: &Lua,
     table: &Table,
     sort_fns: &mut HashMap<String, mlua::RegistryKey>,
+    section_filters: &mut HashMap<String, mlua::RegistryKey>,
 ) -> mlua::Result<ConfigData> {
     let site = parse_site_config(table)?;
     let seo = parse_seo_config(table)?;
@@ -1191,7 +1229,7 @@ fn parse_config(
     let graph = parse_graph_config(table)?;
     let rss = parse_rss_config(table)?;
     let text = parse_text_config(table)?;
-    let sections = parse_sections_config(lua, table, sort_fns)?;
+    let sections = parse_sections_config(lua, table, sort_fns, section_filters)?;
 
     Ok(ConfigData {
         site,
@@ -1393,6 +1431,7 @@ fn parse_sections_config(
     lua: &Lua,
     table: &Table,
     sort_fns: &mut HashMap<String, mlua::RegistryKey>,
+    filter_fns: &mut HashMap<String, mlua::RegistryKey>,
 ) -> mlua::Result<SectionsConfig> {
     let mut sections = HashMap::new();
 
@@ -1402,10 +1441,16 @@ fn parse_sections_config(
                 .get("iterate")
                 .unwrap_or_else(|_| "files".to_string());
 
-            // Store sort_by function if provided
-            if let Ok(func) = section_table.get::<mlua::Function>("sort_by") {
+            // Store sort function if provided
+            if let Ok(func) = section_table.get::<mlua::Function>("sort") {
                 let key = lua.create_registry_value(func)?;
                 sort_fns.insert(name.clone(), key);
+            }
+
+            // Store filter function if provided
+            if let Ok(func) = section_table.get::<mlua::Function>("filter") {
+                let key = lua.create_registry_value(func)?;
+                filter_fns.insert(name.clone(), key);
             }
 
             sections.insert(name, SectionConfig { iterate });
@@ -1445,7 +1490,8 @@ mod tests {
 
         let table: Table = lua.load(config_str).eval().unwrap();
         let mut sort_fns = HashMap::new();
-        let config = parse_config(&lua, &table, &mut sort_fns).unwrap();
+        let mut filter_fns = HashMap::new();
+        let config = parse_config(&lua, &table, &mut sort_fns, &mut filter_fns).unwrap();
 
         assert_eq!(config.site.title, "Test Site");
         assert_eq!(config.site.base_url, "https://example.com");
@@ -1476,7 +1522,8 @@ mod tests {
 
         let table: Table = lua.load(config_str).eval().unwrap();
         let mut sort_fns = HashMap::new();
-        let config = parse_config(&lua, &table, &mut sort_fns).unwrap();
+        let mut filter_fns = HashMap::new();
+        let config = parse_config(&lua, &table, &mut sort_fns, &mut filter_fns).unwrap();
 
         let problems = config.sections.sections.get("problems");
         assert!(problems.is_some());

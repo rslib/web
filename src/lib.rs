@@ -48,11 +48,12 @@
 //!     minify_css = true,
 //!   },
 //!
-//!   -- Section configuration with custom sort
+//!   -- Section configuration with custom filter and sort
 //!   sections = {
 //!     blog = {
 //!       iterate = "files",
-//!       sort_by = function(a, b)
+//!       filter = function(post) return post.frontmatter.date ~= nil end,
+//!       sort = function(a, b)
 //!         -- C-style comparator: return -1, 0, or 1
 //!         if a.date < b.date then return -1
 //!         elseif a.date > b.date then return 1
@@ -90,7 +91,7 @@
 //! - `build` - output_dir, minify_css (default: true)
 //! - `images` - quality (default: 85.0), scale_factor (default: 1.0)
 //! - `paths` - content, styles, static_files, templates, home, exclude
-//! - `sections` - Per-section config with iterate ("files"/"directories") and sort_by function
+//! - `sections` - Per-section config with iterate ("files"/"directories"), filter, sort
 //! - `templates` - Section -> template file mapping
 //! - `permalinks` - Section -> URL pattern (`:year`, `:month`, `:slug`, `:title`, `:section`)
 //! - `encryption` - password_command or password (SITE_PASSWORD env takes priority)

@@ -69,11 +69,15 @@ return {
     minify_css = true,
   },
 
-  -- Section configuration with custom sorting
+  -- Section configuration with custom filtering and sorting
   sections = {
     blog = {
       iterate = "files",  -- or "directories"
-      sort_by = function(a, b)
+      filter = function(post)
+        -- Return true to include, false to exclude
+        return post.frontmatter.date ~= nil
+      end,
+      sort = function(a, b)
         -- C-style comparator: return -1, 0, or 1
         if a.date < b.date then return -1
         elseif a.date > b.date then return 1
@@ -204,7 +208,7 @@ local sum = parallel.reduce(items, 0, function(acc, x) return acc + x end)
 | `build` | output_dir, minify_css |
 | `images` | quality (default: 85.0), scale_factor (default: 1.0) |
 | `paths` | content, styles, static_files, templates, home, exclude |
-| `sections` | Per-section: iterate ("files"/"directories"), sort_by function |
+| `sections` | Per-section: iterate ("files"/"directories"), filter, sort |
 | `templates` | Section -> template file mapping |
 | `permalinks` | Section -> URL pattern (`:year`, `:month`, `:slug`, `:title`, `:section`) |
 | `encryption` | password_command or password (SITE_PASSWORD env has priority) |

@@ -73,7 +73,8 @@ impl Builder {
                 .sum::<usize>()
         );
 
-        // Stage 2.5: Apply custom sort functions
+        // Stage 2.5: Apply custom filter and sort functions
+        self.apply_custom_filtering(&mut content)?;
         self.apply_custom_sorting(&mut content)?;
 
         // Stage 3: Process assets
@@ -137,6 +138,33 @@ impl Builder {
             &self.config.sections,
             Some(&self.project_dir),
         )
+    }
+
+    fn apply_custom_filtering(&self, content: &mut Content) -> Result<()> {
+        for (section_name, section) in content.sections.iter_mut() {
+            // Check if this section has a custom filter function
+            if self.config.has_filter_fn(section_name) {
+                debug!("Applying custom filter to section '{}'", section_name);
+                let original_count = section.posts.len();
+
+                // Filter using the Lua function
+                section.posts.retain(|post| {
+                    let post_json = serde_json::to_value(post).unwrap_or_default();
+                    self.config
+                        .call_filter_fn(section_name, &post_json)
+                        .unwrap_or(true) // Keep post on error
+                });
+
+                let filtered_count = original_count - section.posts.len();
+                if filtered_count > 0 {
+                    debug!(
+                        "Filtered out {} posts from section '{}'",
+                        filtered_count, section_name
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     fn apply_custom_sorting(&self, content: &mut Content) -> Result<()> {
