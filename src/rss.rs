@@ -113,7 +113,7 @@ mod tests {
     }
 
     fn make_test_config() -> Config {
-        Config {
+        Config::from_data(crate::config::ConfigData {
             site: crate::config::SiteConfig {
                 title: "Test Site".to_string(),
                 description: "A test site".to_string(),
@@ -142,7 +142,7 @@ mod tests {
             rss: Default::default(),
             text: Default::default(),
             sections: Default::default(),
-        }
+        })
     }
 
     fn make_test_post(title: &str, description: &str) -> Post {

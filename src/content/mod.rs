@@ -243,10 +243,9 @@ fn process_section(
 
     trace!("Processing section: {}", section_name);
 
-    // Check if this section uses directory iteration
-    let iterate_mode = sections_config
-        .sections
-        .get(&section_name)
+    // Get section config
+    let section_config = sections_config.sections.get(&section_name);
+    let iterate_mode = section_config
         .map(|c| c.iterate.as_str())
         .unwrap_or("files");
 
@@ -258,7 +257,8 @@ fn process_section(
         process_section_files(path, &section_name, exclude_matcher, paths)?
     };
 
-    // Sort posts by date (newest first), then by slug for undated posts
+    // Default sort: by date (newest first), then by slug for undated posts
+    // Custom sorting via Lua functions is applied in build.rs
     posts.sort_by(|a, b| match (&b.frontmatter.date, &a.frontmatter.date) {
         (Some(d1), Some(d2)) => d1.cmp(d2),
         (Some(_), None) => std::cmp::Ordering::Less,

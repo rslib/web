@@ -8,11 +8,10 @@ use crate::assets::{
     ImageConfig, build_css, copy_single_static_file, copy_static_files, optimize_images,
     optimize_single_image,
 };
-use crate::config::Config;
+use crate::config::{ComputedPage, Config};
 use crate::content::{Content, ContentType, Post, discover_content};
 use crate::encryption::{encrypt_content, resolve_password};
 use crate::links::LinkGraph;
-use crate::lua_config::{ComputedPage, LuaConfig};
 use crate::markdown::{
     Pipeline, TransformContext, extract_encrypted_blocks, extract_html_encrypted_blocks,
     replace_placeholders,
@@ -25,7 +24,6 @@ use crate::watch::ChangeSet;
 /// Main build orchestrator
 pub struct Builder {
     config: Config,
-    lua_config: Option<LuaConfig>,
     output_dir: PathBuf,
     project_dir: PathBuf,
 }
@@ -34,15 +32,9 @@ impl Builder {
     pub fn new(config: Config, output_dir: PathBuf, project_dir: PathBuf) -> Self {
         Self {
             config,
-            lua_config: None,
             output_dir,
             project_dir,
         }
-    }
-
-    pub fn with_lua_config(mut self, lua_config: Option<LuaConfig>) -> Self {
-        self.lua_config = lua_config;
-        self
     }
 
     /// Resolve a path relative to the project directory
@@ -61,10 +53,8 @@ impl Builder {
         debug!("Project directory: {:?}", self.project_dir);
 
         // Run before_build hook
-        if let Some(ref lua_config) = self.lua_config {
-            trace!("Running before_build hook");
-            lua_config.call_before_build()?;
-        }
+        trace!("Running before_build hook");
+        self.config.call_before_build()?;
 
         // Stage 1: Clean output directory
         trace!("Stage 1: Cleaning output directory");
@@ -72,7 +62,7 @@ impl Builder {
 
         // Stage 2: Discover and load content
         trace!("Stage 2: Discovering content");
-        let content = self.load_content()?;
+        let mut content = self.load_content()?;
         debug!(
             "Found {} sections with {} total posts",
             content.sections.len(),
@@ -82,6 +72,9 @@ impl Builder {
                 .map(|s| s.posts.len())
                 .sum::<usize>()
         );
+
+        // Stage 2.5: Apply custom sort functions
+        self.apply_custom_sorting(&mut content)?;
 
         // Stage 3: Process assets
         trace!("Stage 3: Processing assets");
@@ -119,10 +112,8 @@ impl Builder {
         );
 
         // Run after_build hook
-        if let Some(ref lua_config) = self.lua_config {
-            trace!("Running after_build hook");
-            lua_config.call_after_build()?;
-        }
+        trace!("Running after_build hook");
+        self.config.call_after_build()?;
 
         Ok(())
     }
@@ -146,6 +137,28 @@ impl Builder {
             &self.config.sections,
             Some(&self.project_dir),
         )
+    }
+
+    fn apply_custom_sorting(&self, content: &mut Content) -> Result<()> {
+        for (section_name, section) in content.sections.iter_mut() {
+            // Check if this section has a custom sort function
+            if self.config.has_sort_fn(section_name) {
+                debug!("Applying custom sort to section '{}'", section_name);
+
+                // Sort using the Lua function
+                section.posts.sort_by(|a, b| {
+                    // Convert posts to JSON for Lua
+                    let a_json = serde_json::to_value(a).unwrap_or_default();
+                    let b_json = serde_json::to_value(b).unwrap_or_default();
+
+                    // Call the Lua sort function
+                    self.config
+                        .call_sort_fn(section_name, &a_json, &b_json)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+        }
+        Ok(())
     }
 
     fn process_assets(&self) -> Result<()> {
@@ -778,74 +791,64 @@ impl Builder {
     /// Reload config from disk
     pub fn reload_config(&mut self) -> Result<()> {
         debug!("Reloading config from {:?}", self.project_dir);
-        let (config, lua_config) = crate::config::Config::load_with_lua(&self.project_dir)?;
-        self.config = config;
-        self.lua_config = lua_config;
+        self.config = crate::config::Config::load(&self.project_dir)?;
         info!("Config reloaded successfully");
         Ok(())
     }
 
     /// Generate computed pages from Lua config
     fn generate_computed_pages(&self, content: &Content) -> Vec<ComputedPage> {
-        if let Some(ref lua_config) = self.lua_config {
-            if !lua_config.has_computed_pages() {
+        if !self.config.has_computed_pages() {
+            return Vec::new();
+        }
+
+        // Serialize sections to JSON for Lua
+        let sections_json = match serde_json::to_string(&content.sections) {
+            Ok(json) => json,
+            Err(e) => {
+                log::warn!("Failed to serialize sections for computed_pages: {}", e);
                 return Vec::new();
             }
+        };
 
-            // Serialize sections to JSON for Lua
-            let sections_json = match serde_json::to_string(&content.sections) {
-                Ok(json) => json,
-                Err(e) => {
-                    log::warn!("Failed to serialize sections for computed_pages: {}", e);
-                    return Vec::new();
-                }
-            };
-
-            match lua_config.call_computed_pages(&sections_json) {
-                Ok(pages) => pages,
-                Err(e) => {
-                    log::warn!("Failed to generate computed pages: {}", e);
-                    Vec::new()
-                }
+        match self.config.call_computed_pages(&sections_json) {
+            Ok(pages) => pages,
+            Err(e) => {
+                log::warn!("Failed to generate computed pages: {}", e);
+                Vec::new()
             }
-        } else {
-            Vec::new()
         }
     }
 
     /// Compute computed data from Lua config
     fn compute_data(&self, content: &Content) -> serde_json::Value {
-        if let Some(ref lua_config) = self.lua_config {
-            let computed_names = lua_config.computed_names();
-            if computed_names.is_empty() {
+        let computed_names = self.config.computed_names();
+        if computed_names.is_empty() {
+            return serde_json::Value::Object(serde_json::Map::new());
+        }
+
+        // Serialize sections to JSON for Lua
+        let sections_json = match serde_json::to_string(&content.sections) {
+            Ok(json) => json,
+            Err(e) => {
+                log::warn!("Failed to serialize sections for computed: {}", e);
                 return serde_json::Value::Object(serde_json::Map::new());
             }
+        };
 
-            // Serialize sections to JSON for Lua
-            let sections_json = match serde_json::to_string(&content.sections) {
-                Ok(json) => json,
-                Err(e) => {
-                    log::warn!("Failed to serialize sections for computed: {}", e);
-                    return serde_json::Value::Object(serde_json::Map::new());
+        let mut computed = serde_json::Map::new();
+        for name in computed_names {
+            match self.config.call_computed(name, &sections_json) {
+                Ok(value) => {
+                    computed.insert(name.to_string(), value);
                 }
-            };
-
-            let mut computed = serde_json::Map::new();
-            for name in computed_names {
-                match lua_config.call_computed(name, &sections_json) {
-                    Ok(value) => {
-                        computed.insert(name.to_string(), value);
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to compute '{}': {}", name, e);
-                    }
+                Err(e) => {
+                    log::warn!("Failed to compute '{}': {}", name, e);
                 }
             }
-
-            serde_json::Value::Object(computed)
-        } else {
-            serde_json::Value::Object(serde_json::Map::new())
         }
+
+        serde_json::Value::Object(computed)
     }
 
     /// Get a reference to the current config

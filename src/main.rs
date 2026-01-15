@@ -111,8 +111,8 @@ fn main() -> Result<()> {
             let project_dir = directory.unwrap_or_else(|| PathBuf::from("."));
             let project_dir = project_dir.canonicalize().unwrap_or(project_dir);
 
-            // Load config from project directory (supports both config.lua and config.toml)
-            let (mut config, lua_config) = Config::load_with_lua(&project_dir)?;
+            // Load config from project directory
+            let mut config = Config::load(&project_dir)?;
 
             // Allow overriding base_url via environment variable (useful for CI/CD)
             if let Ok(base_url) = std::env::var("SITE_BASE_URL") {
@@ -133,8 +133,7 @@ fn main() -> Result<()> {
                 project_dir.join(&config.build.output_dir)
             };
 
-            let mut builder = Builder::new(config, output_dir.clone(), project_dir.clone())
-                .with_lua_config(lua_config);
+            let mut builder = Builder::new(config, output_dir.clone(), project_dir.clone());
 
             // Initial build
             builder.build()?;

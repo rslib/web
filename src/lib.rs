@@ -32,11 +32,7 @@
 //!
 //! ## Configuration
 //!
-//! Configure via `config.lua` (recommended) or `config.toml`:
-//!
-//! ### Lua Configuration (config.lua)
-//!
-//! Lua configuration provides computed data, dynamic pages, and build hooks:
+//! Configure via `config.lua`:
 //!
 //! ```lua
 //! return {
@@ -45,6 +41,24 @@
 //!     description = "Site description",
 //!     base_url = "https://example.com",
 //!     author = "Your Name",
+//!   },
+//!
+//!   build = {
+//!     output_dir = "dist",
+//!     minify_css = true,
+//!   },
+//!
+//!   -- Section configuration with custom sort
+//!   sections = {
+//!     blog = {
+//!       iterate = "files",
+//!       sort_by = function(a, b)
+//!         -- C-style comparator: return -1, 0, or 1
+//!         if a.date < b.date then return -1
+//!         elseif a.date > b.date then return 1
+//!         else return 0 end
+//!       end,
+//!     },
 //!   },
 //!
 //!   -- Computed data available in templates as {{ computed.tags }}
@@ -70,7 +84,21 @@
 //! }
 //! ```
 //!
-//! #### Lua Sandbox
+//! ### Configuration Sections
+//!
+//! - `site` - Required: title, description, base_url, author
+//! - `build` - output_dir, minify_css (default: true)
+//! - `images` - quality (default: 85.0), scale_factor (default: 1.0)
+//! - `paths` - content, styles, static_files, templates, home, exclude
+//! - `sections` - Per-section config with iterate ("files"/"directories") and sort_by function
+//! - `templates` - Section -> template file mapping
+//! - `permalinks` - Section -> URL pattern (`:year`, `:month`, `:slug`, `:title`, `:section`)
+//! - `encryption` - password_command or password (SITE_PASSWORD env takes priority)
+//! - `graph` - enabled, template, path
+//! - `rss` - enabled, filename, sections, limit
+//! - `text` - enabled, sections, exclude_encrypted, include_home
+//!
+//! ### Lua Sandbox
 //!
 //! By default, file operations are sandboxed to the project directory.
 //! To disable (use with caution):
@@ -82,7 +110,7 @@
 //! }
 //! ```
 //!
-//! #### Lua API Functions
+//! ### Lua API Functions
 //!
 //! - `read_file(path)` - Read file contents
 //! - `write_file(path, content)` - Write content to file
@@ -94,78 +122,6 @@
 //! - `print(...)` - Log output to build log
 //!
 //! All file operations respect the sandbox setting.
-//!
-//! ### TOML Configuration (config.toml)
-//!
-//! ### Required Settings
-//!
-//! ```toml
-//! [site]
-//! title = "My Site"                    # Site title
-//! description = "Site description"     # Site description
-//! base_url = "https://example.com"     # Base URL (no trailing slash)
-//! author = "Your Name"                 # Author name
-//!
-//! [seo]
-//! twitter_handle = "@username"         # Optional: Twitter handle
-//! default_og_image = "/static/og.png"  # Optional: Default OG image
-//!
-//! [build]
-//! output_dir = "dist"                  # Output directory
-//! minify_css = true                    # Default: true
-//!
-//! [images]
-//! quality = 85.0                       # WebP quality (default: 85.0)
-//! scale_factor = 1.0                   # Image scale (default: 1.0)
-//! ```
-//!
-//! ### Optional Settings (have defaults)
-//!
-//! ```toml
-//! [paths]
-//! content = "content"                  # Content directory (default: "content")
-//! styles = "styles"                    # Styles directory (default: "styles")
-//! static_files = "static"              # Static files (default: "static")
-//! templates = "templates"              # Templates (default: "templates")
-//! home = "index.md"                    # Home page file (default: "index.md")
-//! exclude = ["drafts", "^temp.*"]      # Regex patterns to exclude files/dirs (default: [])
-//! exclude_defaults = true              # Exclude README.md, LICENSE.md, etc. (default: true)
-//!
-//! [highlight]
-//! names = ["John Doe", "Jane Doe"]     # Names to highlight (default: [])
-//! class = "me"                         # CSS class for highlights (default: "me")
-//!
-//! [templates]
-//! blog = "post.html"                   # Section -> template mapping
-//! projects = "project.html"            # (default: uses {section}.html or post.html)
-//!
-//! [permalinks]
-//! blog = "/:year/:month/:slug/"        # Section -> URL pattern
-//! projects = "/:slug/"                 # Placeholders: :year :month :day :slug :title :section
-//!
-//! [encryption]
-//! password_command = "pass show site"  # Command to get password (optional)
-//! password = "secret"                  # Raw password (optional, less secure)
-//!                                      # Priority: SITE_PASSWORD env > command > password
-//!
-//! [graph]
-//! enabled = true                       # Enable graph generation (default: true)
-//! template = "graph.html"              # Graph page template (default: "graph.html")
-//! path = "graph"                       # URL path (default: "graph" -> /graph/)
-//!
-//! [rss]
-//! enabled = true                       # Enable RSS generation (default: true)
-//! filename = "rss.xml"                 # Output filename (default: "rss.xml")
-//! sections = ["blog"]                  # Sections to include (default: [] = all)
-//! limit = 20                           # Max items (default: 20)
-//! exclude_encrypted_blocks = false     # Exclude posts with :::encrypted (default: false)
-//!
-//! [text]
-//! enabled = false                      # Enable plain text generation (default: false)
-//! sections = ["blog"]                  # Sections to include (default: [] = all)
-//! exclude_encrypted = false            # Exclude encrypted posts (default: false)
-//! include_home = true                  # Include home page as index.txt (default: true)
-//! ```
 //!
 //! ## Root Pages
 //!
@@ -264,7 +220,6 @@ pub mod data;
 pub mod encryption;
 pub mod git;
 pub mod links;
-pub mod lua_config;
 pub mod markdown;
 pub mod rss;
 pub mod templates;

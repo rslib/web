@@ -280,7 +280,7 @@ impl Templates {
     pub fn render_computed_page(
         &self,
         config: &Config,
-        page: &crate::lua_config::ComputedPage,
+        page: &crate::config::ComputedPage,
         computed: Option<&serde_json::Value>,
     ) -> Result<String> {
         let mut context = tera::Context::new();

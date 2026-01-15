@@ -206,7 +206,7 @@ mod tests {
     }
 
     fn make_config() -> Config {
-        Config {
+        Config::from_data(crate::config::ConfigData {
             site: crate::config::SiteConfig {
                 title: "Test".to_string(),
                 description: "Test".to_string(),
@@ -235,7 +235,7 @@ mod tests {
             rss: Default::default(),
             text: Default::default(),
             sections: Default::default(),
-        }
+        })
     }
 
     #[test]
