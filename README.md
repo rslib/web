@@ -227,26 +227,28 @@ Available in `config.lua`:
 
 **Note:** All file operations respect the sandbox setting and are tracked for incremental builds. Paths can be relative (resolved from project root) or absolute.
 
-#### Async/Await Helpers
+#### Coroutine Helpers
 
 Coroutine-based cooperative multitasking with a cleaner API:
 
 ```lua
+local rs = require("rs-web")
+
 -- Create and run tasks
-local task1 = async.task(function()
-  local data = load_json("file1.json")
-  async.yield()  -- cooperative yield
+local task1 = rs.coro.task(function()
+  local data = rs.load_json("file1.json")
+  rs.coro.yield()  -- cooperative yield
   return data
 end)
 
 -- Run single task to completion
-local result = async.await(task1)
+local result = rs.coro.await(task1)
 
 -- Run multiple tasks (interleaved execution)
-local results = async.all({task1, task2, task3})
+local results = rs.coro.all({task1, task2, task3})
 
 -- Race: return first completed
-local winner, index = async.race({task1, task2})
+local winner, index = rs.coro.race({task1, task2})
 ```
 
 #### Parallel Processing
@@ -254,32 +256,34 @@ local winner, index = async.race({task1, task2})
 True parallel execution using Rust's rayon thread pool:
 
 ```lua
+local rs = require("rs-web")
+
 -- Load multiple JSON files in parallel (I/O parallelism)
-local configs = parallel.load_json({
+local configs = rs.parallel.load_json({
   "content/problems/two-sum/config.json",
   "content/problems/reverse-string/config.json",
 })
 
 -- Load multiple YAML files in parallel
-local data = parallel.load_yaml({"a.yaml", "b.yaml", "c.yaml"})
+local data = rs.parallel.load_yaml({"a.yaml", "b.yaml", "c.yaml"})
 
 -- Read multiple files in parallel
-local contents = parallel.read_files({"a.txt", "b.txt", "c.txt"})
+local contents = rs.parallel.read_files({"a.txt", "b.txt", "c.txt"})
 
 -- Parse frontmatter from multiple files in parallel
-local posts = parallel.read_frontmatter({
+local posts = rs.parallel.read_frontmatter({
   "content/blog/post1.md",
   "content/blog/post2.md",
 })
 -- Returns: { { frontmatter = {...}, content = "...", raw = "..." }, ... }
 
 -- Check multiple files exist in parallel
-local exists = parallel.file_exists({"a.txt", "b.txt"})
+local exists = rs.parallel.file_exists({"a.txt", "b.txt"})
 
 -- Functional helpers (sequential but convenient)
-local doubled = parallel.map(items, function(x) return x * 2 end)
-local evens = parallel.filter(items, function(x) return x % 2 == 0 end)
-local sum = parallel.reduce(items, 0, function(acc, x) return acc + x end)
+local doubled = rs.parallel.map(items, function(x) return x * 2 end)
+local evens = rs.parallel.filter(items, function(x) return x % 2 == 0 end)
+local sum = rs.parallel.reduce(items, 0, function(acc, x) return acc + x end)
 ```
 
 #### Async I/O (Tokio)
@@ -287,6 +291,8 @@ local sum = parallel.reduce(items, 0, function(acc, x) return acc + x end)
 True async I/O operations backed by Tokio runtime:
 
 ```lua
+local rs = require("rs-web")
+
 -- HTTP requests
 local response = rs.async.fetch("https://api.example.com/data")
 local json = rs.async.fetch_json("https://api.example.com/users")
