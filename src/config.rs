@@ -74,10 +74,6 @@ pub struct BuildConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct PathsConfig {
-    #[serde(default = "default_styles_dir")]
-    pub styles: String,
-    #[serde(default = "default_static_dir")]
-    pub static_files: String,
     #[serde(default = "default_templates_dir")]
     pub templates: String,
 }
@@ -85,19 +81,11 @@ pub struct PathsConfig {
 impl Default for PathsConfig {
     fn default() -> Self {
         Self {
-            styles: default_styles_dir(),
-            static_files: default_static_dir(),
             templates: default_templates_dir(),
         }
     }
 }
 
-fn default_styles_dir() -> String {
-    "styles".to_string()
-}
-fn default_static_dir() -> String {
-    "static".to_string()
-}
 fn default_templates_dir() -> String {
     "templates".to_string()
 }
@@ -491,10 +479,6 @@ fn parse_paths_config(table: &Table) -> mlua::Result<PathsConfig> {
     let paths: Table = table.get("paths").unwrap_or_else(|_| table.clone());
 
     Ok(PathsConfig {
-        styles: paths.get("styles").unwrap_or_else(|_| "styles".to_string()),
-        static_files: paths
-            .get("static_files")
-            .unwrap_or_else(|_| "static".to_string()),
         templates: paths
             .get("templates")
             .unwrap_or_else(|_| "templates".to_string()),

@@ -229,6 +229,37 @@ pub static LUA_CLASSES: &[LuaClass] = &[
         }],
     },
     LuaClass {
+        name: "GoogleFontOptions",
+        description: "Options for download_google_font",
+        fields: &[
+            LuaField {
+                name: "fonts_dir",
+                typ: "string",
+                description: "Directory to save font files (required)",
+            },
+            LuaField {
+                name: "css_path",
+                typ: "string",
+                description: "Path to save CSS file (required)",
+            },
+            LuaField {
+                name: "css_prefix",
+                typ: "string?",
+                description: "URL prefix for fonts in CSS (default: '/fonts')",
+            },
+            LuaField {
+                name: "weights",
+                typ: "number[]?",
+                description: "Font weights to download (default: {400})",
+            },
+            LuaField {
+                name: "display",
+                typ: "string?",
+                description: "Font display strategy: 'swap'|'block'|'fallback'|'optional' (default: 'swap')",
+            },
+        ],
+    },
+    LuaClass {
         name: "MarkdownEvent",
         description: "Markdown AST event for transformation",
         fields: &[
@@ -1272,12 +1303,12 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "build_css",
         module: None,
-        description: "Build and concatenate CSS files matching a glob pattern",
+        description: "Build and concatenate CSS files from glob pattern or array of paths",
         params: &[
             LuaParam {
-                name: "pattern",
-                typ: "string",
-                description: "Glob pattern (e.g., 'styles/*.css')",
+                name: "paths_or_pattern",
+                typ: "string|string[]",
+                description: "Glob pattern (e.g., 'styles/*.css') or array of file paths",
                 optional: false,
             },
             LuaParam {
@@ -1291,6 +1322,38 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
                 typ: "BuildCssOptions",
                 description: "Build options (minify)",
                 optional: true,
+            },
+        ],
+        returns: "boolean",
+    },
+    LuaFunction {
+        name: "check_unused_assets",
+        module: None,
+        description: "Find assets in output directory not referenced by any HTML file",
+        params: &[LuaParam {
+            name: "output_dir",
+            typ: "string",
+            description: "Output directory to check",
+            optional: false,
+        }],
+        returns: "string[]",
+    },
+    LuaFunction {
+        name: "download_google_font",
+        module: None,
+        description: "Download Google Font files and generate local CSS",
+        params: &[
+            LuaParam {
+                name: "family",
+                typ: "string",
+                description: "Font family name (e.g., 'Lexend', 'Open Sans')",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "GoogleFontOptions",
+                description: "Font options (fonts_dir, css_path required)",
+                optional: false,
             },
         ],
         returns: "boolean",
@@ -1852,6 +1915,46 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         returns: "string",
     },
     LuaFunction {
+        name: "write",
+        module: Some("async"),
+        description: "Write binary data to file asynchronously",
+        params: &[
+            LuaParam {
+                name: "path",
+                typ: "string",
+                description: "File path",
+                optional: false,
+            },
+            LuaParam {
+                name: "data",
+                typ: "string",
+                description: "Binary data to write",
+                optional: false,
+            },
+        ],
+        returns: "boolean",
+    },
+    LuaFunction {
+        name: "fetch_bytes",
+        module: Some("async"),
+        description: "Fetch URL and return binary response body",
+        params: &[
+            LuaParam {
+                name: "url",
+                typ: "string",
+                description: "URL to fetch",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "FetchOptions",
+                description: "Request options",
+                optional: true,
+            },
+        ],
+        returns: "FetchResponse",
+    },
+    LuaFunction {
         name: "read_dir",
         module: Some("async"),
         description: "List directory contents asynchronously",
@@ -2389,7 +2492,10 @@ pub fn generate_markdown() -> String {
                 "image_optimize",
             ],
         ),
-        ("Assets", vec!["build_css"]),
+        (
+            "Assets",
+            vec!["build_css", "check_unused_assets", "download_google_font"],
+        ),
     ];
 
     for (cat_name, func_names) in &categories {

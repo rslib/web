@@ -347,5 +347,163 @@ pub fn register(
     })?;
     module.set("copy_file", copy_file)?;
 
+    // check_unused_assets(output_dir) - Find assets not referenced in HTML
+    let root_clone = root.clone();
+    let check_unused_assets = lua.create_function(move |lua, output_dir: String| {
+        use regex::Regex;
+        use std::collections::HashSet;
+
+        let output_path = resolve_path(&output_dir, &root_clone);
+        if sandbox && !is_path_within_root(&output_path, &root_clone) {
+            return Err(mlua::Error::RuntimeError(format!(
+                "Sandbox: cannot access '{}' outside project directory",
+                output_dir
+            )));
+        }
+
+        // Collect all asset files in output (static/, fonts/)
+        let mut asset_files: HashSet<String> = HashSet::new();
+        for subdir in &["static", "fonts"] {
+            let dir = output_path.join(subdir);
+            if dir.exists() {
+                collect_files_recursive(&dir, subdir, &mut asset_files);
+            }
+        }
+
+        // Scan HTML/CSS files for references
+        let mut referenced: HashSet<String> = HashSet::new();
+
+        // Patterns to match asset references
+        let patterns = [
+            r#"src=["']([^"']+)["']"#,
+            r#"href=["']([^"']+)["']"#,
+            r#"url\(["']?([^"')]+)["']?\)"#,
+            r#"srcset=["']([^"']+)["']"#,
+        ];
+        let regexes: Vec<Regex> = patterns.iter().filter_map(|p| Regex::new(p).ok()).collect();
+
+        // Scan HTML files
+        scan_files_for_refs(&output_path, "html", &regexes, &mut referenced);
+        // Scan CSS files
+        scan_files_for_refs(&output_path, "css", &regexes, &mut referenced);
+
+        // Find unused assets
+        let mut unused: Vec<String> = asset_files
+            .iter()
+            .filter(|asset| !is_asset_referenced(asset, &referenced))
+            .cloned()
+            .collect();
+        unused.sort();
+
+        // Return as Lua table
+        let result = lua.create_table()?;
+        for (i, path) in unused.iter().enumerate() {
+            result.set(i + 1, path.clone())?;
+        }
+
+        Ok(mlua::Value::Table(result))
+    })?;
+    module.set("check_unused_assets", check_unused_assets)?;
+
     Ok(())
+}
+
+/// Recursively collect files from a directory
+fn collect_files_recursive(
+    dir: &Path,
+    prefix: &str,
+    files: &mut std::collections::HashSet<String>,
+) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    // Skip hidden files
+                    if !name.starts_with('.') {
+                        files.insert(format!("/{}/{}", prefix, name));
+                    }
+                }
+            } else if path.is_dir()
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && !name.starts_with('.')
+            {
+                let new_prefix = format!("{}/{}", prefix, name);
+                collect_files_recursive(&path, &new_prefix, files);
+            }
+        }
+    }
+}
+
+/// Scan files with given extension for asset references
+fn scan_files_for_refs(
+    dir: &Path,
+    ext: &str,
+    regexes: &[regex::Regex],
+    referenced: &mut std::collections::HashSet<String>,
+) {
+    let pattern = format!("{}/**/*.{}", dir.display(), ext);
+    if let Ok(paths) = glob::glob(&pattern) {
+        for path in paths.flatten() {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                for regex in regexes {
+                    for cap in regex.captures_iter(&content) {
+                        if let Some(m) = cap.get(1) {
+                            let reference = m.as_str();
+                            // Handle srcset (comma-separated)
+                            if reference.contains(',') {
+                                for part in reference.split(',') {
+                                    let url = part.split_whitespace().next().unwrap_or("");
+                                    if !url.is_empty() {
+                                        referenced.insert(normalize_ref(url));
+                                    }
+                                }
+                            } else {
+                                referenced.insert(normalize_ref(reference));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Normalize a reference path
+fn normalize_ref(reference: &str) -> String {
+    // Skip external URLs
+    if reference.starts_with("http://")
+        || reference.starts_with("https://")
+        || reference.starts_with("//")
+    {
+        return reference.to_string();
+    }
+    // Normalize to absolute path
+    let path = if reference.starts_with('/') {
+        reference.to_string()
+    } else if let Some(stripped) = reference.strip_prefix("./") {
+        format!("/{}", stripped)
+    } else {
+        format!("/{}", reference)
+    };
+    // Remove query strings and fragments
+    path.split('?')
+        .next()
+        .unwrap_or(&path)
+        .split('#')
+        .next()
+        .unwrap_or(&path)
+        .to_string()
+}
+
+/// Check if an asset is referenced (handles path variations)
+fn is_asset_referenced(asset: &str, referenced: &std::collections::HashSet<String>) -> bool {
+    if referenced.contains(asset) {
+        return true;
+    }
+    // Also check without leading slash
+    let without_slash = asset.trim_start_matches('/');
+    referenced.iter().any(|r| {
+        r == without_slash || r.ends_with(asset) || asset.ends_with(r.trim_start_matches('/'))
+    })
 }

@@ -20,12 +20,8 @@ pub enum ChangeType {
     Content(PathBuf),
     /// Template file changed - re-render affected pages
     Template(PathBuf),
-    /// CSS/style file changed - only rebuild CSS
+    /// CSS/style file changed - triggers before_build hook
     Css,
-    /// Static file changed (non-image) - copy that file
-    StaticFile(PathBuf),
-    /// Image file changed - optimize and copy that image
-    Image(PathBuf),
 }
 
 /// Aggregated changes from a batch of file events
@@ -36,8 +32,6 @@ pub struct ChangeSet {
     pub rebuild_home: bool,
     pub content_files: HashSet<PathBuf>,
     pub template_files: HashSet<PathBuf>,
-    pub static_files: HashSet<PathBuf>,
-    pub image_files: HashSet<PathBuf>,
 }
 
 impl ChangeSet {
@@ -47,8 +41,6 @@ impl ChangeSet {
             && !self.rebuild_home
             && self.content_files.is_empty()
             && self.template_files.is_empty()
-            && self.static_files.is_empty()
-            && self.image_files.is_empty()
     }
 
     /// Check if any templates changed
@@ -68,14 +60,6 @@ impl ChangeSet {
                 self.template_files.insert(canonical);
             }
             ChangeType::Css => self.rebuild_css = true,
-            ChangeType::StaticFile(path) => {
-                let canonical = path.canonicalize().unwrap_or(path);
-                self.static_files.insert(canonical);
-            }
-            ChangeType::Image(path) => {
-                let canonical = path.canonicalize().unwrap_or(path);
-                self.image_files.insert(canonical);
-            }
         }
     }
 
@@ -86,8 +70,6 @@ impl ChangeSet {
             self.rebuild_home = false;
             self.content_files.clear();
             self.template_files.clear();
-            self.static_files.clear();
-            self.image_files.clear();
         }
     }
 }
@@ -98,8 +80,6 @@ pub struct FileWatcher {
     output_dir: PathBuf,
     config_path: PathBuf,
     templates_dir: PathBuf,
-    styles_dir: PathBuf,
-    static_dir: PathBuf,
     rx: Receiver<Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>>,
     _watcher: notify_debouncer_mini::Debouncer<RecommendedWatcher>,
 }
@@ -114,12 +94,8 @@ impl FileWatcher {
             .unwrap_or_else(|_| output_dir.to_path_buf());
         let config_path = project_dir.join("config.lua");
         let templates_dir = project_dir.join(&config.paths.templates);
-        let styles_dir = project_dir.join(&config.paths.styles);
-        let static_dir = project_dir.join(&config.paths.static_files);
 
         let templates_dir = templates_dir.canonicalize().unwrap_or(templates_dir);
-        let styles_dir = styles_dir.canonicalize().unwrap_or(styles_dir);
-        let static_dir = static_dir.canonicalize().unwrap_or(static_dir);
         let config_path = config_path.canonicalize().unwrap_or(config_path);
 
         // Create channel for events
@@ -150,16 +126,12 @@ impl FileWatcher {
         println!("Watching for changes...");
         println!("  Project:   {:?}", project_dir);
         println!("  Templates: {:?}", templates_dir);
-        println!("  Styles:    {:?}", styles_dir);
-        println!("  Static:    {:?}", static_dir);
 
         Ok(Self {
             project_dir,
             output_dir,
             config_path,
             templates_dir,
-            styles_dir,
-            static_dir,
             rx,
             _watcher: debouncer,
         })
@@ -241,15 +213,6 @@ impl FileWatcher {
             return Some(ChangeType::Config);
         }
 
-        // Styles directory
-        if path.starts_with(&self.styles_dir) {
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if ext == "css" {
-                return Some(ChangeType::Css);
-            }
-            return None;
-        }
-
         // Templates directory
         if path.starts_with(&self.templates_dir) {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -259,27 +222,17 @@ impl FileWatcher {
             return None;
         }
 
-        // Static directory
-        if path.starts_with(&self.static_dir) {
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-
-            if let Ok(rel) = path.strip_prefix(&self.static_dir) {
-                if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif") {
-                    return Some(ChangeType::Image(rel.to_path_buf()));
-                }
-                return Some(ChangeType::StaticFile(rel.to_path_buf()));
-            }
-            return None;
-        }
-
-        // Any other file in project directory is content (triggers full rebuild)
+        // Any file in project directory
         if path.starts_with(&self.project_dir) {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if (ext == "md" || ext == "html" || ext == "htm" || ext == "json" || ext == "lua")
+
+            // CSS files trigger before_build hook
+            if ext == "css" {
+                return Some(ChangeType::Css);
+            }
+
+            // Content files (md, html, json, lua) trigger rebuild
+            if matches!(ext, "md" | "html" | "htm" | "json" | "lua")
                 && let Ok(rel) = path.strip_prefix(&self.project_dir)
             {
                 return Some(ChangeType::Content(rel.to_path_buf()));
@@ -317,14 +270,6 @@ pub fn format_changes(changes: &ChangeSet) -> String {
 
     if !changes.content_files.is_empty() {
         parts.push(format!("{} content files", changes.content_files.len()));
-    }
-
-    if !changes.static_files.is_empty() {
-        parts.push(format!("{} static files", changes.static_files.len()));
-    }
-
-    if !changes.image_files.is_empty() {
-        parts.push(format!("{} images", changes.image_files.len()));
     }
 
     if parts.is_empty() {

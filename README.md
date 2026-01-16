@@ -175,7 +175,8 @@ Available in `config.lua`:
 
 | Function | Description |
 |----------|-------------|
-| `build_css(pattern, output, options?)` | Build and concatenate CSS files |
+| `build_css(paths_or_pattern, output, options?)` | Build and concatenate CSS files (accepts glob pattern or array of paths) |
+| `check_unused_assets(output_dir)` | Find assets not referenced in HTML output |
 
 **Text Processing:**
 
@@ -305,7 +306,11 @@ local results = rs.async.await_all({t1, t2})
 -- File operations
 local content = rs.async.read_file("path/to/file.txt")  -- text
 local bytes = rs.async.read("path/to/image.png")        -- binary
-rs.async.write_file("output.txt", content)
+rs.async.write_file("output.txt", content)              -- text
+rs.async.write("output.bin", bytes)                     -- binary
+
+-- Fetch binary data (fonts, images, etc.)
+local font = rs.async.fetch_bytes("https://fonts.gstatic.com/...")
 rs.async.copy_file("src.txt", "dst.txt")
 rs.async.rename("old.txt", "new.txt")
 
@@ -331,7 +336,7 @@ print(meta.len, meta.is_file, meta.modified)
 | `site` | title, description, base_url, author (required) |
 | `seo` | twitter_handle, default_og_image |
 | `build` | output_dir |
-| `paths` | styles, static_files, templates |
+| `paths` | templates |
 
 ## Frontmatter
 

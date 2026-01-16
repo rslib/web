@@ -536,9 +536,7 @@ fn run_serve_watch_loop(
             && !changes.full_rebuild
             && !changes.has_template_changes()
             && !changes.rebuild_home
-            && changes.content_files.is_empty()
-            && changes.static_files.is_empty()
-            && changes.image_files.is_empty();
+            && changes.content_files.is_empty();
 
         // Reload config if it changed
         if changes.full_rebuild

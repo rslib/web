@@ -7,7 +7,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::assets::copy_static_files;
 use crate::config::{Config, PageDef};
 use crate::markdown::{Pipeline, TransformContext};
 use crate::templates::Templates;
@@ -114,11 +113,7 @@ impl Builder {
         self.cached_global_data = Some(global_data.clone());
         self.cached_pages = Some(pages.clone());
 
-        // Stage 4: Process assets
-        trace!("Stage 4: Processing assets");
-        self.process_assets()?;
-
-        // Stage 5: Load templates
+        // Stage 4: Load templates
         trace!("Stage 5: Loading templates");
         let templates = Templates::new(
             &self.resolve_path(&self.config.paths.templates),
@@ -252,20 +247,6 @@ impl Builder {
         Ok(())
     }
 
-    fn process_assets(&self) -> Result<()> {
-        let static_dir = self.output_dir.join("static");
-        let paths = &self.config.paths;
-
-        // Copy static files (CSS and images are handled explicitly via Lua hooks)
-        debug!(
-            "Copying static files from {:?}",
-            self.resolve_path(&paths.static_files)
-        );
-        copy_static_files(&self.resolve_path(&paths.static_files), &static_dir)?;
-
-        Ok(())
-    }
-
     fn render_pages(
         &self,
         pages: &[PageDef],
@@ -395,9 +376,6 @@ impl Builder {
         if changes.rebuild_css {
             self.rebuild_css_only()?;
         }
-
-        // Handle static/image changes
-        self.process_static_changes(changes)?;
 
         Ok(())
     }
@@ -542,44 +520,6 @@ impl Builder {
         println!("  Changed: styles");
         self.config.call_before_build()?;
         println!("Rebuilt CSS");
-        Ok(())
-    }
-
-    /// Process static file and image changes (just copies, optimization handled via Lua hooks)
-    fn process_static_changes(&self, changes: &crate::watch::ChangeSet) -> Result<()> {
-        use crate::assets::copy_single_static_file;
-
-        let static_dir = self.output_dir.join("static");
-        let source_static = self.resolve_path(&self.config.paths.static_files);
-
-        // Process changed images (just copy, optimization handled via Lua hooks)
-        for rel_path in &changes.image_files {
-            let src = source_static.join(rel_path.as_path());
-            let dest = static_dir.join(rel_path.as_path());
-
-            if src.exists() {
-                if let Some(parent) = dest.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                copy_single_static_file(&src, &dest)?;
-                println!("  Copied: static/{}", rel_path.display());
-            }
-        }
-
-        // Process changed static files
-        for rel_path in &changes.static_files {
-            let src = source_static.join(rel_path.as_path());
-            let dest = static_dir.join(rel_path.as_path());
-
-            if src.exists() {
-                if let Some(parent) = dest.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                copy_single_static_file(&src, &dest)?;
-                println!("  Copied: static/{}", rel_path.display());
-            }
-        }
-
         Ok(())
     }
 

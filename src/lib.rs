@@ -72,7 +72,7 @@
 //! - `site` - Required: title, description, base_url, author
 //! - `seo` - twitter_handle, default_og_image
 //! - `build` - output_dir
-//! - `paths` - styles, static_files, templates
+//! - `paths` - templates
 //!
 //! ### Lua Sandbox
 //!

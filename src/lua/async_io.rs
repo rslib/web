@@ -28,6 +28,23 @@ fn runtime() -> &'static Runtime {
     })
 }
 
+/// Block on a future, handling the case where we're already in a runtime
+pub fn block_on<F, T>(future: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            // We're in a runtime - use block_in_place to allow blocking
+            tokio::task::block_in_place(|| handle.block_on(future))
+        }
+        Err(_) => {
+            // Not in a runtime, use our global one directly
+            runtime().block_on(future)
+        }
+    }
+}
+
 /// HTTP method enum
 #[derive(Debug, Clone, Copy, Default)]
 enum Method {
@@ -213,6 +230,42 @@ async fn do_fetch(url: &str, opts: &FetchOptions) -> FetchResult {
     })
 }
 
+/// Perform async fetch returning raw bytes (for binary data like fonts, images)
+async fn do_fetch_bytes(
+    url: &str,
+    opts: &FetchOptions,
+) -> std::result::Result<(u16, bool, Vec<u8>), String> {
+    let client = reqwest::Client::new();
+
+    let mut builder = match opts.method {
+        Method::Get => client.get(url),
+        Method::Post => client.post(url),
+        Method::Put => client.put(url),
+        Method::Delete => client.delete(url),
+        Method::Patch => client.patch(url),
+        Method::Head => client.head(url),
+    };
+
+    for (k, v) in &opts.headers {
+        builder = builder.header(k, v);
+    }
+
+    if let Some(body) = &opts.body {
+        builder = builder.body(body.clone());
+    }
+
+    if let Some(timeout) = opts.timeout_secs {
+        builder = builder.timeout(std::time::Duration::from_secs(timeout));
+    }
+
+    let response = builder.send().await.map_err(|e| e.to_string())?;
+    let status = response.status().as_u16();
+    let ok = response.status().is_success();
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+
+    Ok((status, ok, bytes.to_vec()))
+}
+
 use std::path::Path;
 
 use super::helpers::{is_path_within_root, resolve_path};
@@ -232,7 +285,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             FetchOptions::default()
         };
 
-        let result = runtime().block_on(do_fetch(&url, &opts));
+        let result = block_on(do_fetch(&url, &opts));
 
         match result {
             Ok(response) => {
@@ -259,7 +312,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             .entry("Accept".to_string())
             .or_insert_with(|| "application/json".to_string());
 
-        let result = runtime().block_on(do_fetch(&url, &opts));
+        let result = block_on(do_fetch(&url, &opts));
 
         match result {
             Ok(response) => {
@@ -281,6 +334,31 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
         }
     })?;
     async_module.set("fetch_json", fetch_json)?;
+
+    // async.fetch_bytes(url, options?) - Fetch binary data (for fonts, images, etc.)
+    let fetch_bytes = lua.create_function(|lua, args: (String, Option<Table>)| {
+        let (url, opts_table) = args;
+
+        let opts = if let Some(ref t) = opts_table {
+            FetchOptions::from_lua_table(lua, t)?
+        } else {
+            FetchOptions::default()
+        };
+
+        let result = block_on(do_fetch_bytes(&url, &opts));
+
+        match result {
+            Ok((status, ok, bytes)) => {
+                let table = lua.create_table()?;
+                table.set("status", status)?;
+                table.set("ok", ok)?;
+                table.set("body", lua.create_string(&bytes)?)?;
+                Ok(Value::Table(table))
+            }
+            Err(e) => Err(mlua::Error::RuntimeError(format!("Fetch failed: {}", e))),
+        }
+    })?;
+    async_module.set("fetch_bytes", fetch_bytes)?;
 
     // async.fetch_all(requests) - Fetch multiple URLs concurrently
     // requests is a table of {url, options?} or just strings
@@ -311,7 +389,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
         }
 
         // Run all fetches concurrently
-        let results = runtime().block_on(async {
+        let results = block_on(async {
             let futures: Vec<_> = urls_and_opts
                 .iter()
                 .map(|(url, opts)| do_fetch(url, opts))
@@ -385,7 +463,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
         drop(task); // Release borrow before blocking
 
         if let Some(h) = handle {
-            let result = runtime().block_on(h);
+            let result = block_on(h);
             let task = ud.borrow::<AsyncTask>()?;
             match result {
                 Ok(fetch_result) => {
@@ -434,7 +512,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
         }
 
         // Await all pending handles
-        let results = runtime().block_on(async {
+        let results = block_on(async {
             let mut results: Vec<Option<FetchResult>> = Vec::with_capacity(handles.len());
             for _ in 0..handles.len() {
                 results.push(None);
@@ -505,7 +583,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             )));
         }
 
-        let result = runtime().block_on(async { tokio::fs::read(&resolved).await });
+        let result = block_on(async { tokio::fs::read(&resolved).await });
 
         match result {
             Ok(bytes) => Ok(Value::String(lua.create_string(&bytes)?)),
@@ -528,7 +606,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             )));
         }
 
-        let result = runtime().block_on(async { tokio::fs::read_to_string(&resolved).await });
+        let result = block_on(async { tokio::fs::read_to_string(&resolved).await });
 
         match result {
             Ok(content) => Ok(Value::String(lua.create_string(&content)?)),
@@ -554,12 +632,12 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
         // Ensure parent directory exists
         if let Some(parent) = resolved.parent() {
             let parent = parent.to_path_buf();
-            runtime().block_on(async {
+            block_on(async {
                 tokio::fs::create_dir_all(&parent).await.ok();
             });
         }
 
-        let result = runtime().block_on(async { tokio::fs::write(&resolved, &content).await });
+        let result = block_on(async { tokio::fs::write(&resolved, &content).await });
 
         match result {
             Ok(()) => Ok(true),
@@ -570,6 +648,38 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
         }
     })?;
     async_module.set("write_file", write_file)?;
+
+    // async.write(path, data) - Async binary file write
+    let root_clone = root.clone();
+    let write = lua.create_function(move |_, (path, data): (String, mlua::String)| {
+        let resolved = resolve_path(&path, &root_clone);
+        if sandbox && !is_path_within_root(&resolved, &root_clone) {
+            return Err(mlua::Error::RuntimeError(format!(
+                "Sandbox: cannot write '{}' outside project directory",
+                path
+            )));
+        }
+
+        // Ensure parent directory exists
+        if let Some(parent) = resolved.parent() {
+            let parent = parent.to_path_buf();
+            block_on(async {
+                tokio::fs::create_dir_all(&parent).await.ok();
+            });
+        }
+
+        let bytes = data.as_bytes().to_vec();
+        let result = block_on(async { tokio::fs::write(&resolved, &bytes).await });
+
+        match result {
+            Ok(()) => Ok(true),
+            Err(e) => Err(mlua::Error::RuntimeError(format!(
+                "Failed to write file '{}': {}",
+                path, e
+            ))),
+        }
+    })?;
+    async_module.set("write", write)?;
 
     // async.read_files(paths) - Async batch file read
     let root_clone = root.clone();
@@ -590,7 +700,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
         }
 
         // Read all files concurrently
-        let results = runtime().block_on(async {
+        let results = block_on(async {
             let futures: Vec<_> = resolved_paths
                 .iter()
                 .map(tokio::fs::read_to_string)
@@ -628,7 +738,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             )));
         }
 
-        let result = runtime().block_on(async { tokio::fs::read_to_string(&resolved).await });
+        let result = block_on(async { tokio::fs::read_to_string(&resolved).await });
 
         match result {
             Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
@@ -670,13 +780,12 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
         // Ensure parent directory exists
         if let Some(parent) = dst_resolved.parent() {
             let parent = parent.to_path_buf();
-            runtime().block_on(async {
+            block_on(async {
                 tokio::fs::create_dir_all(&parent).await.ok();
             });
         }
 
-        let result =
-            runtime().block_on(async { tokio::fs::copy(&src_resolved, &dst_resolved).await });
+        let result = block_on(async { tokio::fs::copy(&src_resolved, &dst_resolved).await });
 
         match result {
             Ok(bytes) => Ok(bytes),
@@ -712,13 +821,12 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
         // Ensure parent directory exists
         if let Some(parent) = dst_resolved.parent() {
             let parent = parent.to_path_buf();
-            runtime().block_on(async {
+            block_on(async {
                 tokio::fs::create_dir_all(&parent).await.ok();
             });
         }
 
-        let result =
-            runtime().block_on(async { tokio::fs::rename(&src_resolved, &dst_resolved).await });
+        let result = block_on(async { tokio::fs::rename(&src_resolved, &dst_resolved).await });
 
         match result {
             Ok(()) => Ok(true),
@@ -742,7 +850,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             )));
         }
 
-        let result = runtime().block_on(async { tokio::fs::create_dir_all(&resolved).await });
+        let result = block_on(async { tokio::fs::create_dir_all(&resolved).await });
 
         match result {
             Ok(()) => Ok(true),
@@ -766,7 +874,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             )));
         }
 
-        let result = runtime().block_on(async { tokio::fs::remove_file(&resolved).await });
+        let result = block_on(async { tokio::fs::remove_file(&resolved).await });
 
         match result {
             Ok(()) => Ok(true),
@@ -790,7 +898,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             )));
         }
 
-        let result = runtime().block_on(async { tokio::fs::remove_dir_all(&resolved).await });
+        let result = block_on(async { tokio::fs::remove_dir_all(&resolved).await });
 
         match result {
             Ok(()) => Ok(true),
@@ -814,7 +922,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             )));
         }
 
-        let result = runtime().block_on(async { tokio::fs::try_exists(&resolved).await });
+        let result = block_on(async { tokio::fs::try_exists(&resolved).await });
 
         match result {
             Ok(exists) => Ok(exists),
@@ -838,7 +946,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             )));
         }
 
-        let result = runtime().block_on(async { tokio::fs::metadata(&resolved).await });
+        let result = block_on(async { tokio::fs::metadata(&resolved).await });
 
         match result {
             Ok(meta) => {
@@ -886,7 +994,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             is_symlink: bool,
         }
 
-        let result = runtime().block_on(async {
+        let result = block_on(async {
             let mut entries = Vec::new();
             let mut dir = tokio::fs::read_dir(&resolved).await?;
             while let Some(entry) = dir.next_entry().await? {
@@ -944,7 +1052,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             )));
         }
 
-        let result = runtime().block_on(async { tokio::fs::canonicalize(&resolved).await });
+        let result = block_on(async { tokio::fs::canonicalize(&resolved).await });
 
         match result {
             Ok(canonical) => Ok(canonical.to_string_lossy().to_string()),
