@@ -40,31 +40,86 @@ pub struct ServerState {
 const LIVE_RELOAD_SCRIPT: &str = r#"
 <script>
 (function() {
-    var ws = new WebSocket('ws://' + location.host + '/__rs_web_live_reload');
-    ws.onmessage = function(event) {
-        var msg = JSON.parse(event.data);
-        if (msg.type === 'reload') {
-            location.reload();
-        } else if (msg.type === 'css') {
-            // Hot reload CSS
-            var links = document.querySelectorAll('link[rel="stylesheet"]');
-            links.forEach(function(link) {
-                var href = link.getAttribute('href');
-                if (href) {
-                    var url = new URL(href, location.href);
-                    url.searchParams.set('_reload', Date.now());
-                    link.setAttribute('href', url.toString());
-                }
-            });
+    var reconnectInterval = 1000;
+    var maxReconnectInterval = 5000;
+    var reconnecting = false;
+    var isConnecting = false;
+
+    function connect() {
+        if (isConnecting) return;
+        isConnecting = true;
+
+        var ws;
+        try {
+            ws = new WebSocket('ws://' + location.host + '/__rs_web_live_reload');
+        } catch (e) {
+            isConnecting = false;
+            scheduleReconnect();
+            return;
         }
-    };
-    ws.onclose = function() {
-        console.log('[rs-web] Live reload disconnected. Attempting reconnect...');
-        setTimeout(function() { location.reload(); }, 1000);
-    };
-    ws.onerror = function() {
-        console.log('[rs-web] Live reload connection error');
-    };
+
+        ws.onopen = function() {
+            console.log('[rs-web] Live reload connected');
+            isConnecting = false;
+            reconnectInterval = 1000;
+            if (reconnecting) {
+                // Server is back - verify page is ready then reload
+                fetch(location.href, { method: 'HEAD', cache: 'no-store' })
+                    .then(function(resp) {
+                        if (resp.ok) {
+                            location.reload();
+                        } else {
+                            scheduleReconnect();
+                        }
+                    })
+                    .catch(function() {
+                        scheduleReconnect();
+                    });
+            }
+        };
+
+        ws.onmessage = function(event) {
+            console.log('[rs-web] Received:', event.data);
+            var msg = JSON.parse(event.data);
+            if (msg.type === 'reload') {
+                console.log('[rs-web] Reloading page...');
+                location.reload();
+            } else if (msg.type === 'css') {
+                // Hot reload CSS
+                var links = document.querySelectorAll('link[rel="stylesheet"]');
+                links.forEach(function(link) {
+                    var href = link.getAttribute('href');
+                    if (href) {
+                        var url = new URL(href, location.href);
+                        url.searchParams.set('_reload', Date.now());
+                        link.setAttribute('href', url.toString());
+                    }
+                });
+            }
+        };
+
+        ws.onclose = function() {
+            isConnecting = false;
+            if (!reconnecting) {
+                console.log('[rs-web] Live reload disconnected');
+            }
+            reconnecting = true;
+            scheduleReconnect();
+        };
+
+        ws.onerror = function() {
+            // Let onclose handle reconnection
+        };
+    }
+
+    function scheduleReconnect() {
+        setTimeout(function() {
+            reconnectInterval = Math.min(reconnectInterval * 1.5, maxReconnectInterval);
+            connect();
+        }, reconnectInterval);
+    }
+
+    connect();
 })();
 </script>
 "#;
@@ -206,5 +261,10 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<broadcast::Sende
 
 /// Notify clients to reload
 pub fn notify_reload(tx: &broadcast::Sender<ReloadMessage>, message: ReloadMessage) {
-    let _ = tx.send(message);
+    let receivers = tx.receiver_count();
+    log::debug!("Sending reload message to {} connected clients", receivers);
+    match tx.send(message) {
+        Ok(n) => log::debug!("Reload message sent to {} receivers", n),
+        Err(e) => log::warn!("Failed to send reload message: {}", e),
+    }
 }
