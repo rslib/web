@@ -1,3 +1,5 @@
+//! Tera template engine wrapper with page rendering
+
 use anyhow::{Context, Result};
 use log::{debug, trace};
 use serde::Serialize;

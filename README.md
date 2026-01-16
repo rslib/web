@@ -327,24 +327,6 @@ print(meta.len, meta.is_file, meta.modified)
 | `build` | output_dir |
 | `paths` | styles, static_files, templates |
 
-## Root Pages
-
-Markdown files at the content root (besides the home page) are processed as standalone pages. For example, `404.md` becomes `404.html`:
-
-```yaml
----
-title: "404 - Page Not Found"
-template: "error.html"
----
-
-# Page Not Found
-The page you're looking for doesn't exist.
-```
-
-Default excluded files (disable with `exclude_defaults = false`):
-- README.md, LICENSE.md, CHANGELOG.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
-- Hidden files (starting with `.`)
-
 ## Frontmatter
 
 Post frontmatter options (YAML or TOML):

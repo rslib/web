@@ -1,3 +1,5 @@
+//! File watcher for incremental rebuilds
+
 use anyhow::{Context, Result};
 use log::{debug, trace, warn};
 use notify::{RecommendedWatcher, RecursiveMode};

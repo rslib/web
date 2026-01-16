@@ -1,3 +1,5 @@
+//! Build orchestrator for static site generation
+
 use anyhow::{Context, Result};
 use log::{debug, info, trace};
 use rayon::prelude::*;

@@ -1,3 +1,5 @@
+//! Markdown processing with syntax highlighting and transformations
+
 pub mod encrypted_blocks;
 mod parser;
 mod pipeline;

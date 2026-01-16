@@ -1,3 +1,5 @@
+//! Git integration for commit info and file history
+
 use git2::Repository;
 use std::collections::HashMap;
 use std::path::Path;

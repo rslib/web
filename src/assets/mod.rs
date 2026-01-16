@@ -1,3 +1,5 @@
+//! Asset processing (CSS bundling, image optimization)
+
 mod css;
 pub mod images;
 

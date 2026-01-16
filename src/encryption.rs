@@ -1,3 +1,5 @@
+//! AES-256-GCM encryption with Argon2id key derivation
+
 use aes_gcm::{
     Aes256Gcm, Key, Nonce,
     aead::{Aead, KeyInit},

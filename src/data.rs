@@ -1,3 +1,5 @@
+//! Tera template functions for data loading and content rendering
+
 use glob::glob;
 use pulldown_cmark::{Options, Parser, html};
 use std::collections::HashMap;
