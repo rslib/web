@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 /// Check if a path is within the project root (for sandbox enforcement)
 pub fn is_path_within_root(path: &Path, root: &Path) -> bool {
-    // Try to canonicalize the path, handling both existing and non-existing paths
     let resolved = if path.exists() {
         path.canonicalize().ok()
     } else {

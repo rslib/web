@@ -326,7 +326,6 @@ print(meta.len, meta.is_file, meta.modified)
 | `seo` | twitter_handle, default_og_image |
 | `build` | output_dir |
 | `paths` | styles, static_files, templates |
-| `encryption` | password_command or password (SITE_PASSWORD env has priority) |
 
 ## Root Pages
 
@@ -385,7 +384,7 @@ date = 2024-01-15
 
 {% block content %}
 <div class="custom">
-  <h1>{{ post.title }}</h1>
+  <h1>{{ page.data.post.title }}</h1>
   <p>By {{ site.author }}</p>
 </div>
 {% endblock %}

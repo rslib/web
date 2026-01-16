@@ -27,7 +27,6 @@ pub fn register(
             root_clone.join(&path)
         };
 
-        // Read file for tracking (canonicalize for consistent path matching)
         if let Ok(content) = std::fs::read(&full_path) {
             let canonical = full_path
                 .canonicalize()
@@ -74,7 +73,6 @@ pub fn register(
                 root_clone.join(&output)
             };
 
-            // Read input for tracking (canonicalize for consistent path matching)
             let input_content = std::fs::read(&input_path)
                 .map_err(|e| mlua::Error::external(format!("Failed to read image: {}", e)))?;
             let input_canonical = input_path
@@ -162,7 +160,6 @@ pub fn register(
                 root_clone.join(&output)
             };
 
-            // Read input for tracking (canonicalize for consistent path matching)
             let input_content = std::fs::read(&input_path)
                 .map_err(|e| mlua::Error::external(format!("Failed to read image: {}", e)))?;
             let input_canonical = input_path
@@ -173,14 +170,12 @@ pub fn register(
             let img = image::open(&input_path)
                 .map_err(|e| mlua::Error::external(format!("Failed to open image: {}", e)))?;
 
-            // Create output directory if needed
             if let Some(parent) = output_path.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| {
                     mlua::Error::external(format!("Failed to create directory: {}", e))
                 })?;
             }
 
-            // Determine format from argument or extension
             let ext = format.unwrap_or_else(|| {
                 output_path
                     .extension()
@@ -237,7 +232,6 @@ pub fn register(
                 root_clone.join(&output)
             };
 
-            // Read input for tracking (canonicalize for consistent path matching)
             let input_content = std::fs::read(&input_path)
                 .map_err(|e| mlua::Error::external(format!("Failed to read image: {}", e)))?;
             let input_canonical = input_path
@@ -248,7 +242,6 @@ pub fn register(
             let img = image::open(&input_path)
                 .map_err(|e| mlua::Error::external(format!("Failed to open image: {}", e)))?;
 
-            // Create output directory if needed
             if let Some(parent) = output_path.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| {
                     mlua::Error::external(format!("Failed to create directory: {}", e))

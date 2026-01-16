@@ -2,14 +2,11 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce,
     aead::{Aead, KeyInit},
 };
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use log::{debug, trace};
+use log::trace;
 use rand::RngCore;
-use std::process::Command;
-
-use crate::config::EncryptionConfig;
 
 /// Argon2 parameters - must match JavaScript implementation
 const ARGON2_MEMORY_COST: u32 = 65536; // 64 MiB
@@ -28,74 +25,6 @@ pub struct EncryptedContent {
     pub salt: String,
     /// Base64-encoded nonce used for encryption
     pub nonce: String,
-}
-
-/// Resolve password from various sources in priority order:
-/// 1. per-post password (frontmatter) - highest priority
-/// 2. SITE_PASSWORD environment variable
-/// 3. password_command output
-/// 4. config password (global default)
-///
-/// Note: Partial block passwords are handled separately in build.rs
-/// and take priority over all of these.
-pub fn resolve_password(
-    config: &EncryptionConfig,
-    frontmatter_password: Option<&str>,
-) -> Result<String> {
-    trace!("Resolving encryption password");
-
-    // Priority 1: Frontmatter password (highest priority)
-    if let Some(password) = frontmatter_password {
-        debug!("Using password from frontmatter");
-        return Ok(password.to_string());
-    }
-
-    // Priority 2: Environment variable
-    if let Ok(password) = std::env::var("SITE_PASSWORD")
-        && !password.is_empty()
-    {
-        debug!("Using password from SITE_PASSWORD environment variable");
-        return Ok(password);
-    }
-
-    // Priority 3: Command output
-    if let Some(ref cmd) = config.password_command {
-        trace!("Executing password command");
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .output()
-            .with_context(|| format!("Failed to execute password command: {}", cmd))?;
-
-        if output.status.success() {
-            let password = String::from_utf8(output.stdout)
-                .with_context(|| "Password command output is not valid UTF-8")?
-                .trim()
-                .to_string();
-            if !password.is_empty() {
-                debug!("Using password from command: {}", cmd);
-                return Ok(password);
-            }
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!(
-                "Password command failed: {} - {}",
-                cmd,
-                stderr.trim()
-            ));
-        }
-    }
-
-    // Priority 4: Config password (global default)
-    if let Some(ref password) = config.password {
-        debug!("Using password from config");
-        return Ok(password.clone());
-    }
-
-    Err(anyhow!(
-        "No encryption password found. Set SITE_PASSWORD env var, \
-         configure password_command, or set password in config/frontmatter"
-    ))
 }
 
 /// Derive a 256-bit key from password using Argon2id
@@ -216,51 +145,5 @@ mod tests {
 
         // Should fail to decrypt
         assert!(cipher.decrypt(nonce, ciphertext.as_ref()).is_err());
-    }
-
-    #[test]
-    fn test_resolve_password_from_frontmatter() {
-        let config = EncryptionConfig {
-            password_command: None,
-            password: None,
-        };
-
-        let password = resolve_password(&config, Some("frontmatter-pass")).unwrap();
-        assert_eq!(password, "frontmatter-pass");
-    }
-
-    #[test]
-    fn test_resolve_password_from_config() {
-        let config = EncryptionConfig {
-            password_command: None,
-            password: Some("config-pass".to_string()),
-        };
-
-        // Config password is used when no frontmatter password
-        let password = resolve_password(&config, None).unwrap();
-        assert_eq!(password, "config-pass");
-    }
-
-    #[test]
-    fn test_frontmatter_password_overrides_config() {
-        let config = EncryptionConfig {
-            password_command: None,
-            password: Some("config-pass".to_string()),
-        };
-
-        // Frontmatter password takes priority over config
-        let password = resolve_password(&config, Some("frontmatter-pass")).unwrap();
-        assert_eq!(password, "frontmatter-pass");
-    }
-
-    #[test]
-    fn test_resolve_password_no_source() {
-        let config = EncryptionConfig {
-            password_command: None,
-            password: None,
-        };
-
-        let result = resolve_password(&config, None);
-        assert!(result.is_err());
     }
 }

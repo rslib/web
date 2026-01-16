@@ -3,7 +3,7 @@
 //! A fast, opinionated static site generator built in Rust with support for:
 //!
 //! - **Markdown processing** with syntax highlighting, external link handling
-//! - **Content encryption** (full post or partial `:::encrypted` blocks)
+//! - **Content encryption** via Lua (`rs.crypt` module)
 //! - **Link graph** with backlinks and visualization (Obsidian-style)
 //! - **RSS feed** generation with section filtering
 //! - **Parallel processing** for fast builds
@@ -73,7 +73,6 @@
 //! - `seo` - twitter_handle, default_og_image
 //! - `build` - output_dir
 //! - `paths` - styles, static_files, templates
-//! - `encryption` - password_command or password (SITE_PASSWORD env takes priority)
 //!
 //! ### Lua Sandbox
 //!
@@ -172,7 +171,13 @@
 //! - `read_dir(path)` - List directory contents
 //! - `canonicalize(path)` - Get canonical/absolute path
 //!
+//! **Encryption (rs.crypt):**
+//! - `encrypt(content, password?)` - Encrypt content (AES-256-GCM)
+//! - `decrypt(data, password?)` - Decrypt content
+//! - `encrypt_html(content, options?)` - Generate encrypted HTML block for browser decryption
+//!
 //! All file operations respect the sandbox setting and are tracked for incremental builds.
+//! Encryption uses SITE_PASSWORD environment variable if password is not provided.
 //!
 //! ## Root Pages
 //!
@@ -208,25 +213,27 @@
 //! template: "custom.html"       # Optional: Override template
 //! slug: "custom-slug"           # Optional: Override URL slug
 //! permalink: "/custom/url/"     # Optional: Full URL override
-//! encrypted: false              # Optional: Encrypt entire post
-//! password: "post-secret"       # Optional: Post-specific password
 //! ---
 //! ```
 //!
-//! ## Partial Encryption
+//! ## Encryption (via Lua)
 //!
-//! Use `:::encrypted` blocks for partial content encryption:
+//! Encryption is handled via the `rs.crypt` module in Lua. Use `SITE_PASSWORD`
+//! environment variable or pass password explicitly:
 //!
-//! ```markdown
-//! Public content here.
+//! ```lua
+//! -- Encrypt content
+//! local encrypted = rs.crypt.encrypt("secret content")
+//! -- Returns: { ciphertext, salt, nonce }
 //!
-//! :::encrypted
-//! This content is encrypted with the global/post password.
-//! :::
+//! -- Generate encrypted HTML block for browser decryption
+//! local html = rs.crypt.encrypt_html("secret content", {
+//!   slug = "post-slug",
+//!   block_id = "secret-1",
+//! })
 //!
-//! :::encrypted password="custom"
-//! This block has its own password.
-//! :::
+//! -- Decrypt content
+//! local plaintext = rs.crypt.decrypt(encrypted)
 //! ```
 //!
 //! ## Template Variables
@@ -255,7 +262,7 @@
 //! - [`config`] - Configuration loading and structures
 //! - [`markdown`] - Markdown processing pipeline
 //! - [`templates`] - Tera template rendering
-//! - [`encryption`] - AES-GCM encryption for protected content
+//! - [`encryption`] - AES-256-GCM encryption utilities (used by `rs.crypt` Lua module)
 //! - [`build`] - Main build orchestrator
 
 pub mod assets;

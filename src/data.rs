@@ -30,7 +30,6 @@ pub fn make_load_json(tracker: Option<SharedTracker>) -> impl Function {
             Err(_) => return Ok(Value::Null),
         };
 
-        // Track file read (canonicalize path for consistent matching)
         if let Some(ref tracker) = tracker {
             let canonical = path.canonicalize().unwrap_or(path);
             tracker.record_read(canonical, content.as_bytes());
@@ -56,7 +55,6 @@ pub fn make_read_file(tracker: Option<SharedTracker>) -> impl Function {
 
         match std::fs::read_to_string(&path) {
             Ok(content) => {
-                // Track file read (canonicalize path for consistent matching)
                 if let Some(ref tracker) = tracker {
                     let canonical = path.canonicalize().unwrap_or(path);
                     tracker.record_read(canonical, content.as_bytes());
@@ -81,7 +79,6 @@ pub fn make_read_markdown(tracker: Option<SharedTracker>) -> impl Function {
 
         match std::fs::read_to_string(&path) {
             Ok(content) => {
-                // Track file read (canonicalize path for consistent matching)
                 if let Some(ref tracker) = tracker {
                     let canonical = path.canonicalize().unwrap_or(path);
                     tracker.record_read(canonical, content.as_bytes());

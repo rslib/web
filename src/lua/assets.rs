@@ -59,7 +59,6 @@ pub fn register(
                     mlua::Error::external(format!("Failed to read {:?}: {}", path, e))
                 })?;
 
-                // Track each CSS file read (canonicalize for consistent path matching)
                 let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
                 tracker_clone.record_read(canonical, content.as_bytes());
 

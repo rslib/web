@@ -61,11 +61,37 @@ impl Templates {
         context.insert("global", &ctx.global);
         context.insert("page", &ctx.page);
 
+        // Get content and check if it needs Tera processing
+        let raw_content = html_content
+            .map(|s| s.to_string())
+            .or_else(|| page.html.clone());
+
+        // If content contains Tera syntax, pre-process it through Tera
+        let processed_content = if let Some(ref content) = raw_content {
+            if content.contains("{{") || content.contains("{%") {
+                // Content has Tera syntax - render it with context
+                trace!(
+                    "Pre-processing content with Tera syntax for page '{}'",
+                    page.path
+                );
+                match Tera::one_off(content, &context, false) {
+                    Ok(rendered) => Some(rendered),
+                    Err(e) => {
+                        // Log warning but continue with original content
+                        debug!("Failed to pre-process content Tera syntax: {}", e);
+                        raw_content
+                    }
+                }
+            } else {
+                raw_content
+            }
+        } else {
+            None
+        };
+
         // Insert content directly for easy access
-        if let Some(content) = html_content {
+        if let Some(ref content) = processed_content {
             context.insert("content", content);
-        } else if let Some(ref html) = page.html {
-            context.insert("content", html);
         }
 
         let template = page

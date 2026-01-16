@@ -418,6 +418,53 @@ pub static LUA_CLASSES: &[LuaClass] = &[
         ],
     },
     LuaClass {
+        name: "EncryptedData",
+        description: "Encrypted content data from crypt.encrypt",
+        fields: &[
+            LuaField {
+                name: "ciphertext",
+                typ: "string",
+                description: "Base64-encoded encrypted content",
+            },
+            LuaField {
+                name: "salt",
+                typ: "string",
+                description: "Base64-encoded salt for key derivation",
+            },
+            LuaField {
+                name: "nonce",
+                typ: "string",
+                description: "Base64-encoded nonce for decryption",
+            },
+        ],
+    },
+    LuaClass {
+        name: "EncryptHtmlOptions",
+        description: "Options for crypt.encrypt_html",
+        fields: &[
+            LuaField {
+                name: "password",
+                typ: "string?",
+                description: "Encryption password (uses SITE_PASSWORD env if not provided)",
+            },
+            LuaField {
+                name: "slug",
+                typ: "string?",
+                description: "Page slug for localStorage key (default: 'page')",
+            },
+            LuaField {
+                name: "block_id",
+                typ: "string?",
+                description: "Unique block ID (auto-generated if not provided)",
+            },
+            LuaField {
+                name: "own_password",
+                typ: "boolean?",
+                description: "Whether block has its own password (default: false)",
+            },
+        ],
+    },
+    LuaClass {
         name: "DirEntry",
         description: "Directory entry from async.read_dir",
         fields: &[
@@ -1828,6 +1875,67 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         }],
         returns: "string",
     },
+    // CRYPT MODULE
+    LuaFunction {
+        name: "encrypt",
+        module: Some("crypt"),
+        description: "Encrypt content using AES-256-GCM",
+        params: &[
+            LuaParam {
+                name: "content",
+                typ: "string",
+                description: "Content to encrypt",
+                optional: false,
+            },
+            LuaParam {
+                name: "password",
+                typ: "string",
+                description: "Encryption password (uses SITE_PASSWORD env if not provided)",
+                optional: true,
+            },
+        ],
+        returns: "EncryptedData",
+    },
+    LuaFunction {
+        name: "decrypt",
+        module: Some("crypt"),
+        description: "Decrypt content using AES-256-GCM",
+        params: &[
+            LuaParam {
+                name: "data",
+                typ: "EncryptedData",
+                description: "Encrypted data table with ciphertext, salt, nonce",
+                optional: false,
+            },
+            LuaParam {
+                name: "password",
+                typ: "string",
+                description: "Decryption password (uses SITE_PASSWORD env if not provided)",
+                optional: true,
+            },
+        ],
+        returns: "string",
+    },
+    LuaFunction {
+        name: "encrypt_html",
+        module: Some("crypt"),
+        description: "Encrypt content and wrap in HTML container for browser decryption",
+        params: &[
+            LuaParam {
+                name: "content",
+                typ: "string",
+                description: "Content to encrypt (can be HTML)",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "EncryptHtmlOptions",
+                description: "Encryption options",
+                optional: true,
+            },
+        ],
+        returns: "string",
+    },
 ];
 
 // ============================================================================
@@ -1871,6 +1979,7 @@ pub fn generate_emmylua() -> String {
     let mut coro_fns: Vec<&LuaFunction> = Vec::new();
     let mut parallel_fns: Vec<&LuaFunction> = Vec::new();
     let mut async_fns: Vec<&LuaFunction> = Vec::new();
+    let mut crypt_fns: Vec<&LuaFunction> = Vec::new();
 
     for func in LUA_FUNCTIONS {
         match func.module {
@@ -1878,6 +1987,7 @@ pub fn generate_emmylua() -> String {
             Some("coro") => coro_fns.push(func),
             Some("parallel") => parallel_fns.push(func),
             Some("async") => async_fns.push(func),
+            Some("crypt") => crypt_fns.push(func),
             _ => global_fns.push(func),
         }
     }
@@ -1960,6 +2070,32 @@ pub fn generate_emmylua() -> String {
     }
     output.push('\n');
 
+    // Generate crypt submodule class
+    output.push_str(
+        "-- =============================================================================\n",
+    );
+    output.push_str("-- CRYPT SUBMODULE\n");
+    output.push_str(
+        "-- =============================================================================\n\n",
+    );
+    output.push_str("---@class RsCryptModule\n");
+    for func in &crypt_fns {
+        let params = func
+            .params
+            .iter()
+            .map(|p| {
+                let opt = if p.optional { "?" } else { "" };
+                format!("{}{}: {}", p.name, opt, p.typ)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!(
+            "---@field {} fun({}): {} {}\n",
+            func.name, params, func.returns, func.description
+        ));
+    }
+    output.push('\n');
+
     // Generate main rs module class
     output.push_str(
         "-- =============================================================================\n",
@@ -1975,6 +2111,7 @@ pub fn generate_emmylua() -> String {
     output.push_str("---@field coro RsCoroModule Coroutine helpers\n");
     output.push_str("---@field parallel RsParallelModule Parallel processing functions\n");
     output.push_str("---@field async RsAsyncModule Async I/O functions (tokio-backed)\n");
+    output.push_str("---@field crypt RsCryptModule Encryption functions (AES-256-GCM)\n");
 
     // Add all global functions as fields
     for func in &global_fns {
@@ -2109,6 +2246,33 @@ pub fn generate_emmylua() -> String {
         ));
     }
 
+    // Crypt submodule stubs
+    output.push_str("-- Crypt submodule (AES-256-GCM encryption)\n");
+    output.push_str("rs.crypt = {}\n\n");
+
+    for func in &crypt_fns {
+        output.push_str(&format!("---{}\n", func.description));
+        for param in func.params {
+            let opt = if param.optional { "?" } else { "" };
+            output.push_str(&format!(
+                "---@param {}{} {} {}\n",
+                param.name, opt, param.typ, param.description
+            ));
+        }
+        output.push_str(&format!("---@return {}\n", func.returns));
+
+        let params = func
+            .params
+            .iter()
+            .map(|p| p.name.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!(
+            "function rs.crypt.{}({}) end\n\n",
+            func.name, params
+        ));
+    }
+
     output.push_str("return rs\n");
 
     output
@@ -2138,7 +2302,8 @@ pub fn generate_markdown() -> String {
     output.push_str("- [Image Processing](#image-processing)\n");
     output.push_str("- [Coro Module](#coro-module)\n");
     output.push_str("- [Parallel Module](#parallel-module)\n");
-    output.push_str("- [Async Module](#async-module)\n\n");
+    output.push_str("- [Async Module](#async-module)\n");
+    output.push_str("- [Crypt Module](#crypt-module)\n\n");
 
     // Types section
     output.push_str("## Types\n\n");
@@ -2307,6 +2472,28 @@ pub fn generate_markdown() -> String {
     output.push_str("Async I/O operations backed by Tokio.\n\n");
     for func in LUA_FUNCTIONS.iter().filter(|f| f.module == Some("async")) {
         output.push_str(&format!("### `rs.async.{}()`\n\n", func.name));
+        output.push_str(&format!("{}\n\n", func.description));
+
+        if !func.params.is_empty() {
+            output.push_str("**Parameters:**\n\n");
+            for param in func.params {
+                let opt = if param.optional { " (optional)" } else { "" };
+                output.push_str(&format!(
+                    "- `{}`: `{}`{} - {}\n",
+                    param.name, param.typ, opt, param.description
+                ));
+            }
+            output.push('\n');
+        }
+
+        output.push_str(&format!("**Returns:** `{}`\n\n", func.returns));
+    }
+
+    // Crypt module
+    output.push_str("## Crypt Module\n\n");
+    output.push_str("Encryption functions using AES-256-GCM with Argon2id key derivation.\n\n");
+    for func in LUA_FUNCTIONS.iter().filter(|f| f.module == Some("crypt")) {
+        output.push_str(&format!("### `rs.crypt.{}()`\n\n", func.name));
         output.push_str(&format!("{}\n\n", func.description));
 
         if !func.params.is_empty() {

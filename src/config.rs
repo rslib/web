@@ -18,7 +18,6 @@ pub struct ConfigData {
     pub seo: SeoConfig,
     pub build: BuildConfig,
     pub paths: PathsConfig,
-    pub encryption: EncryptionConfig,
 }
 
 /// Main configuration structure with embedded Lua state
@@ -103,13 +102,6 @@ fn default_templates_dir() -> String {
     "templates".to_string()
 }
 
-/// Encryption config for password-protected posts
-#[derive(Debug, Deserialize, Clone, Default)]
-pub struct EncryptionConfig {
-    pub password_command: Option<String>,
-    pub password: Option<String>,
-}
-
 /// Page definition
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct PageDef {
@@ -118,7 +110,7 @@ pub struct PageDef {
     /// Template file to use (e.g., "post.html"). If not set, outputs html directly.
     #[serde(default)]
     pub template: Option<String>,
-    /// Page title (for <title> and ctx.page.title)
+    /// Page title (for `<title>` and ctx.page.title)
     #[serde(default)]
     pub title: Option<String>,
     /// Meta description
@@ -194,7 +186,7 @@ impl Config {
             .unwrap_or_else(|_| project_root.clone());
 
         // First pass: register functions without sandbox to load config
-        crate::lua::register(&lua, &project_root, false, tracker.clone())
+        crate::lua::register(&lua, &project_root, false, tracker.clone(), None)
             .map_err(|e| anyhow::anyhow!("Failed to register Lua functions: {}", e))?;
 
         // Load and execute the config file
@@ -218,7 +210,7 @@ impl Config {
 
         // Re-register functions with proper sandbox setting if sandbox is enabled
         if sandbox {
-            crate::lua::register(&lua, &project_root, true, tracker.clone())
+            crate::lua::register(&lua, &project_root, true, tracker.clone(), None)
                 .map_err(|e| anyhow::anyhow!("Failed to register Lua functions: {}", e))?;
         }
 
@@ -456,14 +448,12 @@ fn parse_config(_lua: &Lua, table: &Table) -> mlua::Result<ConfigData> {
     let seo = parse_seo_config(table)?;
     let build = parse_build_config(table)?;
     let paths = parse_paths_config(table)?;
-    let encryption = parse_encryption_config(table)?;
 
     Ok(ConfigData {
         site,
         seo,
         build,
         paths,
-        encryption,
     })
 }
 
@@ -511,15 +501,6 @@ fn parse_paths_config(table: &Table) -> mlua::Result<PathsConfig> {
     })
 }
 
-fn parse_encryption_config(table: &Table) -> mlua::Result<EncryptionConfig> {
-    let encryption: Table = table.get("encryption").unwrap_or_else(|_| table.clone());
-
-    Ok(EncryptionConfig {
-        password_command: encryption.get("password_command").ok(),
-        password: encryption.get("password").ok(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,7 +513,7 @@ mod tests {
     fn test_minimal_lua_config() {
         let lua = Lua::new();
         let root = test_project_root();
-        crate::lua::register(&lua, &root, false, Arc::new(BuildTracker::disabled()))
+        crate::lua::register(&lua, &root, false, Arc::new(BuildTracker::disabled()), None)
             .expect("failed to register Lua functions");
 
         let config_str = r#"
@@ -564,7 +545,7 @@ mod tests {
     fn test_lua_helper_functions() {
         let lua = Lua::new();
         let root = test_project_root();
-        crate::lua::register(&lua, &root, false, Arc::new(BuildTracker::disabled()))
+        crate::lua::register(&lua, &root, false, Arc::new(BuildTracker::disabled()), None)
             .expect("failed to register Lua functions");
 
         // Test file_exists
@@ -585,7 +566,7 @@ mod tests {
     fn test_sandbox_blocks_outside_access() {
         let lua = Lua::new();
         let root = test_project_root();
-        crate::lua::register(&lua, &root, true, Arc::new(BuildTracker::disabled()))
+        crate::lua::register(&lua, &root, true, Arc::new(BuildTracker::disabled()), None)
             .expect("failed to register Lua functions");
 
         // Trying to access /etc/passwd should fail with sandbox enabled
@@ -611,7 +592,7 @@ mod tests {
     fn test_sandbox_allows_project_access() {
         let lua = Lua::new();
         let root = test_project_root();
-        crate::lua::register(&lua, &root, true, Arc::new(BuildTracker::disabled()))
+        crate::lua::register(&lua, &root, true, Arc::new(BuildTracker::disabled()), None)
             .expect("failed to register Lua functions");
 
         // Accessing files within project should work

@@ -94,23 +94,17 @@ pub struct FileWatcher {
 
 impl FileWatcher {
     pub fn new(project_dir: &Path, config: &Config, output_dir: &Path) -> Result<Self> {
-        // Canonicalize project_dir to ensure consistent path matching
         let project_dir = project_dir
             .canonicalize()
             .unwrap_or_else(|_| project_dir.to_path_buf());
-
-        // Canonicalize output_dir to skip it during watch
         let output_dir = output_dir
             .canonicalize()
             .unwrap_or_else(|_| output_dir.to_path_buf());
-
-        // Resolve all watched paths (canonicalize for consistent matching)
         let config_path = project_dir.join("config.lua");
         let templates_dir = project_dir.join(&config.paths.templates);
         let styles_dir = project_dir.join(&config.paths.styles);
         let static_dir = project_dir.join(&config.paths.static_files);
 
-        // Canonicalize watched directories if they exist
         let templates_dir = templates_dir.canonicalize().unwrap_or(templates_dir);
         let styles_dir = styles_dir.canonicalize().unwrap_or(styles_dir);
         let static_dir = static_dir.canonicalize().unwrap_or(static_dir);
@@ -212,7 +206,6 @@ impl FileWatcher {
 
     /// Classify a file path into a change type
     fn classify_change(&self, path: &Path) -> Option<ChangeType> {
-        // Canonicalize the event path for consistent comparison
         let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let path = path.as_path();
 

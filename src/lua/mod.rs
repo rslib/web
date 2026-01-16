@@ -15,6 +15,7 @@ mod async_io;
 mod collections;
 mod content;
 mod coro;
+mod crypt;
 mod env;
 mod file_ops;
 mod git;
@@ -54,11 +55,13 @@ use std::path::Path;
 /// - Coroutines: rs.coro.task, rs.coro.await, rs.coro.yield, etc.
 /// - Parallel (rayon): rs.parallel.load_json, rs.parallel.read_files, etc.
 /// - Async I/O (tokio): rs.async.fetch, rs.async.read_file, rs.async.write_file, etc.
+/// - Encryption: rs.crypt.encrypt, rs.crypt.decrypt, rs.crypt.encrypt_html
 pub fn register(
     lua: &Lua,
     project_root: &Path,
     sandbox: bool,
     tracker: SharedTracker,
+    global_password: Option<String>,
 ) -> Result<()> {
     let root = project_root.to_path_buf();
 
@@ -91,6 +94,9 @@ pub fn register(
     let async_module = async_io::create_module(lua, &root, sandbox)?;
     // Use raw_set to avoid "async" being a reserved word in some contexts
     rs_module.raw_set("async", async_module)?;
+
+    let crypt_module = crypt::create_module(lua, global_password)?;
+    rs_module.set("crypt", crypt_module)?;
 
     // Register as a preloaded module so require("rs-web") works
     let preload: Table = lua
