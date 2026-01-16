@@ -38,6 +38,17 @@ impl Pipeline {
 
     /// Process markdown content through the pipeline
     pub fn process(&self, content: &str, ctx: &TransformContext<'_>) -> String {
+        // Strip frontmatter if present (delimited by ---)
+        let content = if let Some(stripped) = content.strip_prefix("---") {
+            if let Some(end) = stripped.find("---") {
+                &stripped[end + 3..]
+            } else {
+                content
+            }
+        } else {
+            content
+        };
+
         let mut events = parse_markdown(content);
 
         // Apply each transform
@@ -52,13 +63,12 @@ impl Pipeline {
 
 impl Pipeline {
     /// Create pipeline with default transforms and configuration
-    pub fn from_config(config: &Config) -> Self {
+    pub fn from_config(_config: &Config) -> Self {
         use super::transforms::*;
 
         Self::new()
             .with(LazyImagesTransform)
             .with(HeadingAnchorsTransform::new())
-            .with(NameHighlightTransform::new(config.highlight.clone()))
             .with(ExternalLinksTransform)
             .build()
     }

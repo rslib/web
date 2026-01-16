@@ -14,7 +14,7 @@ use crate::config::Config;
 pub enum ChangeType {
     /// Config file changed - requires full rebuild
     Config,
-    /// Content file changed (markdown or HTML in content dir)
+    /// Content file changed - requires full rebuild (Lua controls content)
     Content(PathBuf),
     /// Template file changed - re-render all posts
     Template,
@@ -24,8 +24,6 @@ pub enum ChangeType {
     StaticFile(PathBuf),
     /// Image file changed - optimize and copy that image
     Image(PathBuf),
-    /// Home page changed
-    Home,
 }
 
 /// Aggregated changes from a batch of file events
@@ -51,15 +49,15 @@ impl ChangeSet {
             && self.image_files.is_empty()
     }
 
-    pub fn add(&mut self, change: ChangeType) {
+    fn add(&mut self, change: ChangeType) {
         match change {
             ChangeType::Config => self.full_rebuild = true,
-            ChangeType::Css => self.rebuild_css = true,
-            ChangeType::Template => self.reload_templates = true,
-            ChangeType::Home => self.rebuild_home = true,
             ChangeType::Content(path) => {
+                // Any content change triggers full rebuild
                 self.content_files.insert(path);
             }
+            ChangeType::Template => self.reload_templates = true,
+            ChangeType::Css => self.rebuild_css = true,
             ChangeType::StaticFile(path) => {
                 self.static_files.insert(path);
             }
@@ -69,8 +67,8 @@ impl ChangeSet {
         }
     }
 
-    /// Optimize the change set - if full rebuild is needed, clear everything else
-    pub fn optimize(&mut self) {
+    fn optimize(&mut self) {
+        // If full rebuild, clear incremental changes
         if self.full_rebuild {
             self.rebuild_css = false;
             self.reload_templates = false;
@@ -78,11 +76,6 @@ impl ChangeSet {
             self.content_files.clear();
             self.static_files.clear();
             self.image_files.clear();
-        }
-        // If templates changed, we need to re-render all content anyway
-        if self.reload_templates {
-            self.content_files.clear();
-            self.rebuild_home = true;
         }
     }
 }
@@ -92,11 +85,9 @@ pub struct FileWatcher {
     project_dir: PathBuf,
     output_dir: PathBuf,
     config_path: PathBuf,
-    content_dir: PathBuf,
     templates_dir: PathBuf,
     styles_dir: PathBuf,
     static_dir: PathBuf,
-    home_path: PathBuf,
     rx: Receiver<Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>>,
     _watcher: notify_debouncer_mini::Debouncer<RecommendedWatcher>,
 }
@@ -114,19 +105,15 @@ impl FileWatcher {
             .unwrap_or_else(|_| output_dir.to_path_buf());
 
         // Resolve all watched paths (canonicalize for consistent matching)
-        let config_path = project_dir.join("config.toml");
-        let content_dir = project_dir.join(&config.paths.content);
+        let config_path = project_dir.join("config.lua");
         let templates_dir = project_dir.join(&config.paths.templates);
         let styles_dir = project_dir.join(&config.paths.styles);
         let static_dir = project_dir.join(&config.paths.static_files);
-        let home_path = content_dir.join(&config.paths.home);
 
         // Canonicalize watched directories if they exist
-        let content_dir = content_dir.canonicalize().unwrap_or(content_dir);
         let templates_dir = templates_dir.canonicalize().unwrap_or(templates_dir);
         let styles_dir = styles_dir.canonicalize().unwrap_or(styles_dir);
         let static_dir = static_dir.canonicalize().unwrap_or(static_dir);
-        let home_path = home_path.canonicalize().unwrap_or(home_path);
         let config_path = config_path.canonicalize().unwrap_or(config_path);
 
         // Create channel for events
@@ -147,41 +134,15 @@ impl FileWatcher {
                 .with_context(|| format!("Failed to watch config: {:?}", config_path))?;
         }
 
-        // Watch content directory
-        if content_dir.exists() {
-            trace!("Watching content: {:?}", content_dir);
-            watcher
-                .watch(&content_dir, RecursiveMode::Recursive)
-                .with_context(|| format!("Failed to watch content: {:?}", content_dir))?;
-        }
-
-        // Watch templates directory
-        if templates_dir.exists() {
-            trace!("Watching templates: {:?}", templates_dir);
-            watcher
-                .watch(&templates_dir, RecursiveMode::Recursive)
-                .with_context(|| format!("Failed to watch templates: {:?}", templates_dir))?;
-        }
-
-        // Watch styles directory
-        if styles_dir.exists() {
-            trace!("Watching styles: {:?}", styles_dir);
-            watcher
-                .watch(&styles_dir, RecursiveMode::Recursive)
-                .with_context(|| format!("Failed to watch styles: {:?}", styles_dir))?;
-        }
-
-        // Watch static directory
-        if static_dir.exists() {
-            trace!("Watching static: {:?}", static_dir);
-            watcher
-                .watch(&static_dir, RecursiveMode::Recursive)
-                .with_context(|| format!("Failed to watch static: {:?}", static_dir))?;
-        }
+        // Watch project directory for content changes (Lua decides what's content)
+        trace!("Watching project: {:?}", project_dir);
+        watcher
+            .watch(&project_dir, RecursiveMode::Recursive)
+            .with_context(|| format!("Failed to watch project: {:?}", project_dir))?;
 
         debug!("File watcher initialized");
         println!("Watching for changes...");
-        println!("  Content:   {:?}", content_dir);
+        println!("  Project:   {:?}", project_dir);
         println!("  Templates: {:?}", templates_dir);
         println!("  Styles:    {:?}", styles_dir);
         println!("  Static:    {:?}", static_dir);
@@ -190,11 +151,9 @@ impl FileWatcher {
             project_dir,
             output_dir,
             config_path,
-            content_dir,
             templates_dir,
             styles_dir,
             static_dir,
-            home_path,
             rx,
             _watcher: debouncer,
         })
@@ -277,13 +236,6 @@ impl FileWatcher {
             return Some(ChangeType::Config);
         }
 
-        // Home page
-        if path == self.home_path {
-            return Some(ChangeType::Home);
-        }
-
-        // Check specific directories FIRST (before content, which may be a parent)
-
         // Styles directory
         if path.starts_with(&self.styles_dir) {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -319,15 +271,14 @@ impl FileWatcher {
             return None;
         }
 
-        // Content directory (check last as it may be a parent of other dirs)
-        if path.starts_with(&self.content_dir) {
+        // Any other file in project directory is content (triggers full rebuild)
+        if path.starts_with(&self.project_dir) {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if (ext == "md" || ext == "html" || ext == "htm")
-                && let Ok(rel) = path.strip_prefix(&self.content_dir)
+            if (ext == "md" || ext == "html" || ext == "htm" || ext == "json" || ext == "lua")
+                && let Ok(rel) = path.strip_prefix(&self.project_dir)
             {
                 return Some(ChangeType::Content(rel.to_path_buf()));
             }
-            return None;
         }
 
         None
@@ -352,7 +303,7 @@ pub fn format_changes(changes: &ChangeSet) -> String {
     }
 
     if changes.rebuild_css {
-        parts.push("css".to_string());
+        parts.push("styles".to_string());
     }
 
     if changes.rebuild_home {
@@ -360,13 +311,7 @@ pub fn format_changes(changes: &ChangeSet) -> String {
     }
 
     if !changes.content_files.is_empty() {
-        let count = changes.content_files.len();
-        if count == 1 {
-            let path = changes.content_files.iter().next().unwrap();
-            parts.push(format!("content: {}", path.display()));
-        } else {
-            parts.push(format!("{} content files", count));
-        }
+        parts.push(format!("{} content files", changes.content_files.len()));
     }
 
     if !changes.static_files.is_empty() {
@@ -378,8 +323,8 @@ pub fn format_changes(changes: &ChangeSet) -> String {
     }
 
     if parts.is_empty() {
-        "no relevant changes".to_string()
-    } else {
-        parts.join(", ")
+        return "no actionable changes".to_string();
     }
+
+    parts.join(", ")
 }

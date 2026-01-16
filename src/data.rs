@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tera::{Function, Value};
 
+use crate::text::html_to_text;
+
 /// Expand ~ to home directory
 fn expand_tilde(path: &str) -> PathBuf {
     path.strip_prefix("~/")
@@ -195,6 +197,15 @@ pub fn markdown_filter(value: &Value, _args: &HashMap<String, Value>) -> tera::R
     Ok(Value::String(html_output))
 }
 
+/// html_to_text filter - Convert HTML to beautifully formatted plain text
+pub fn html_to_text_filter(value: &Value, _args: &HashMap<String, Value>) -> tera::Result<Value> {
+    let html = value
+        .as_str()
+        .ok_or_else(|| tera::Error::msg("html_to_text filter requires a string"))?;
+
+    Ok(Value::String(html_to_text(html)))
+}
+
 /// linebreaks filter - Convert newlines to <br> tags and double newlines to paragraphs
 /// Also supports basic markdown: **bold**, *label*, `code`
 pub fn linebreaks_filter(value: &Value, _args: &HashMap<String, Value>) -> tera::Result<Value> {
@@ -324,6 +335,7 @@ pub fn register_data_functions(tera: &mut tera::Tera) {
     tera.register_function("list_dirs", make_list_dirs());
     tera.register_filter("markdown", markdown_filter);
     tera.register_filter("linebreaks", linebreaks_filter);
+    tera.register_filter("html_to_text", html_to_text_filter);
 }
 
 #[cfg(test)]

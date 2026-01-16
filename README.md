@@ -34,6 +34,23 @@ rs-web build --output public
 rs-web build --watch
 ```
 
+## Incremental Builds
+
+When using `--watch`, rs-web tracks file dependencies automatically and only rebuilds what's necessary:
+
+- **Dependency tracking**: All file reads/writes in Lua are tracked automatically
+- **Smart rebuilds**: Only rebuilds when tracked dependencies change
+- **Memoization**: Transform functions like `render_markdown` cache results
+- **Cache persistence**: Dependencies are cached in `.rs-web-cache/deps.bin`
+
+```bash
+# Watch mode with smart incremental builds
+rs-web build --watch
+
+# Clean the cache to force a full rebuild
+rm -rf .rs-web-cache
+```
+
 ## Logging
 
 Control log verbosity with `--debug`, `--log-level`, or the `RS_WEB_LOG_LEVEL` environment variable.
@@ -66,45 +83,15 @@ return {
 
   build = {
     output_dir = "dist",
-    minify_css = true,
   },
 
-  -- Section configuration with custom filtering and sorting
-  sections = {
-    blog = {
-      iterate = "files",  -- or "directories"
-      filter = function(post)
-        -- Return true to include, false to exclude
-        return post.frontmatter.date ~= nil
-      end,
-      sort = function(a, b)
-        -- C-style comparator: return -1, 0, or 1
-        if a.date < b.date then return -1
-        elseif a.date > b.date then return 1
-        else return 0 end
-      end,
-    },
-  },
-
-  -- Computed data available in templates as {{ computed.tags }}
-  computed = {
-    tags = function(sections)
-      -- Process sections and return data for templates
-      return { ... }
-    end,
-  },
-
-  -- Generate dynamic pages (e.g., /tags/array/, /tags/string/)
-  computed_pages = function(sections)
+  -- Generate pages via Lua
+  pages = function()
     return {
-      { path = "/tags/array/", template = "tag.html", title = "Array", data = {...} },
+      { path = "/", template = "home.html", title = "Home" },
+      { path = "/about/", template = "page.html", title = "About" },
     }
   end,
-
-  -- Custom Tera filters: {{ value | my_filter }}
-  filters = {
-    shout = function(s) return s:upper() .. "!" end,
-  },
 
   -- Build hooks
   hooks = {
@@ -142,18 +129,93 @@ When sandbox is enabled:
 
 Available in `config.lua`:
 
+**File Operations:**
+
 | Function | Description |
 |----------|-------------|
 | `read_file(path)` | Read file contents, returns nil if not found |
 | `write_file(path, content)` | Write content to file, returns true/false |
+| `copy_file(src, dest)` | Copy file (binary-safe), returns true/false |
 | `file_exists(path)` | Check if file exists |
 | `list_files(path, pattern?)` | List files matching glob pattern |
 | `list_dirs(path)` | List subdirectories |
 | `load_json(path)` | Load and parse JSON file |
+| `load_yaml(path)` | Load and parse YAML file |
+| `load_toml(path)` | Load and parse TOML file |
+| `read_frontmatter(path)` | Extract frontmatter and content from markdown |
+
+**Content Processing:**
+
+| Function | Description |
+|----------|-------------|
+| `render_markdown(content, transform_fn?)` | Convert markdown to HTML with optional transform |
+| `html_to_text(html)` | Convert HTML to plain text |
+| `rss_date(date_string)` | Format date for RSS (RFC 2822) |
+
+**Image Processing:**
+
+| Function | Description |
+|----------|-------------|
+| `image_dimensions(path)` | Get image width and height |
+| `image_resize(input, output, options)` | Resize image (options: width, height?, quality?) |
+| `image_convert(input, output, options?)` | Convert image format (options: format?, quality?) |
+| `image_optimize(input, output, options?)` | Optimize/compress image (options: quality?) |
+
+**Asset Building:**
+
+| Function | Description |
+|----------|-------------|
+| `build_css(pattern, output, options?)` | Build and concatenate CSS files |
+
+**Text Processing:**
+
+| Function | Description |
+|----------|-------------|
+| `slugify(text)` | Convert text to URL-friendly slug |
+| `word_count(text)` | Count words in text |
+| `reading_time(text, wpm?)` | Calculate reading time in minutes |
+| `truncate(text, len, suffix?)` | Truncate text with optional suffix |
+| `strip_tags(html)` | Remove HTML tags |
+| `format_date(date, format)` | Format a date string |
+| `parse_date(str)` | Parse date string to table {year, month, day} |
+| `hash(content)` | Hash content (xxHash64) |
+| `hash_file(path)` | Hash file contents |
+| `url_encode(str)` | URL encode a string |
+| `url_decode(str)` | URL decode a string |
+
+**Path Utilities:**
+
+| Function | Description |
+|----------|-------------|
+| `join_path(...)` | Join path segments |
+| `basename(path)` | Get file name from path |
+| `dirname(path)` | Get directory from path |
+| `extension(path)` | Get file extension |
+
+**Collections:**
+
+| Function | Description |
+|----------|-------------|
+| `filter(items, fn)` | Filter items where fn returns true |
+| `sort(items, fn)` | Sort items using comparator |
+| `map(items, fn)` | Transform each item |
+| `find(items, fn)` | Find first item where fn returns true |
+| `group_by(items, key_fn)` | Group items by key |
+| `unique(items)` | Remove duplicates |
+| `reverse(items)` | Reverse array order |
+| `take(items, n)` | Take first n items |
+| `skip(items, n)` | Skip first n items |
+| `keys(table)` | Get all keys from a table |
+| `values(table)` | Get all values from a table |
+
+**Environment:**
+
+| Function | Description |
+|----------|-------------|
 | `env(name)` | Get environment variable |
 | `print(...)` | Log output to build log |
 
-**Note:** All file operations respect the sandbox setting. Paths can be relative (resolved from project root) or absolute.
+**Note:** All file operations respect the sandbox setting and are tracked for incremental builds. Paths can be relative (resolved from project root) or absolute.
 
 #### Async/Await Helpers
 
@@ -188,8 +250,18 @@ local configs = parallel.load_json({
   "content/problems/reverse-string/config.json",
 })
 
+-- Load multiple YAML files in parallel
+local data = parallel.load_yaml({"a.yaml", "b.yaml", "c.yaml"})
+
 -- Read multiple files in parallel
 local contents = parallel.read_files({"a.txt", "b.txt", "c.txt"})
+
+-- Parse frontmatter from multiple files in parallel
+local posts = parallel.read_frontmatter({
+  "content/blog/post1.md",
+  "content/blog/post2.md",
+})
+-- Returns: { { frontmatter = {...}, content = "...", raw = "..." }, ... }
 
 -- Check multiple files exist in parallel
 local exists = parallel.file_exists({"a.txt", "b.txt"})
@@ -205,16 +277,10 @@ local sum = parallel.reduce(items, 0, function(acc, x) return acc + x end)
 | Section | Key Settings |
 |---------|--------------|
 | `site` | title, description, base_url, author (required) |
-| `build` | output_dir, minify_css |
-| `images` | quality (default: 85.0), scale_factor (default: 1.0) |
-| `paths` | content, styles, static_files, templates, home, exclude |
-| `sections` | Per-section: iterate ("files"/"directories"), filter, sort |
-| `templates` | Section -> template file mapping |
-| `permalinks` | Section -> URL pattern (`:year`, `:month`, `:slug`, `:title`, `:section`) |
+| `seo` | twitter_handle, default_og_image |
+| `build` | output_dir |
+| `paths` | styles, static_files, templates |
 | `encryption` | password_command or password (SITE_PASSWORD env has priority) |
-| `graph` | enabled, template, path |
-| `rss` | enabled, filename, sections, limit |
-| `text` | enabled, sections, exclude_encrypted, include_home |
 
 ## Root Pages
 

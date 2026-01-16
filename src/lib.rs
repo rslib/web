@@ -45,37 +45,15 @@
 //!
 //!   build = {
 //!     output_dir = "dist",
-//!     minify_css = true,
 //!   },
 //!
-//!   -- Section configuration with custom filter and sort
-//!   sections = {
-//!     blog = {
-//!       iterate = "files",
-//!       filter = function(post) return post.frontmatter.date ~= nil end,
-//!       sort = function(a, b)
-//!         -- C-style comparator: return -1, 0, or 1
-//!         if a.date < b.date then return -1
-//!         elseif a.date > b.date then return 1
-//!         else return 0 end
-//!       end,
-//!     },
-//!   },
-//!
-//!   -- Computed data available in templates as {{ computed.tags }}
-//!   computed = {
-//!     tags = function(sections) return {...} end,
-//!   },
-//!
-//!   -- Generate dynamic pages
-//!   computed_pages = function(sections)
-//!     return {{ path = "/tags/array/", template = "tag.html", title = "Array", data = {...} }}
+//!   -- Generate pages via Lua
+//!   pages = function()
+//!     return {
+//!       { path = "/", template = "home.html", title = "Home" },
+//!       { path = "/about/", template = "page.html", title = "About" },
+//!     }
 //!   end,
-//!
-//!   -- Custom Tera filters: {{ value | my_filter }}
-//!   filters = {
-//!     shout = function(s) return s:upper() .. "!" end,
-//!   },
 //!
 //!   -- Build hooks
 //!   hooks = {
@@ -88,16 +66,10 @@
 //! ### Configuration Sections
 //!
 //! - `site` - Required: title, description, base_url, author
-//! - `build` - output_dir, minify_css (default: true)
-//! - `images` - quality (default: 85.0), scale_factor (default: 1.0)
-//! - `paths` - content, styles, static_files, templates, home, exclude
-//! - `sections` - Per-section config with iterate ("files"/"directories"), filter, sort
-//! - `templates` - Section -> template file mapping
-//! - `permalinks` - Section -> URL pattern (`:year`, `:month`, `:slug`, `:title`, `:section`)
+//! - `seo` - twitter_handle, default_og_image
+//! - `build` - output_dir
+//! - `paths` - styles, static_files, templates
 //! - `encryption` - password_command or password (SITE_PASSWORD env takes priority)
-//! - `graph` - enabled, template, path
-//! - `rss` - enabled, filename, sections, limit
-//! - `text` - enabled, sections, exclude_encrypted, include_home
 //!
 //! ### Lua Sandbox
 //!
@@ -113,16 +85,69 @@
 //!
 //! ### Lua API Functions
 //!
+//! **File Operations:**
 //! - `read_file(path)` - Read file contents
 //! - `write_file(path, content)` - Write content to file
+//! - `copy_file(src, dest)` - Copy file (binary-safe)
 //! - `file_exists(path)` - Check if file exists
 //! - `list_files(path, pattern?)` - List files matching pattern
 //! - `list_dirs(path)` - List subdirectories
 //! - `load_json(path)` - Load and parse JSON file
+//! - `load_yaml(path)` - Load and parse YAML file
+//! - `load_toml(path)` - Load and parse TOML file
+//! - `read_frontmatter(path)` - Extract frontmatter and content from markdown
+//!
+//! **Content Processing:**
+//! - `render_markdown(content, transform_fn?)` - Convert markdown to HTML
+//! - `html_to_text(html)` - Convert HTML to plain text
+//! - `rss_date(date_string)` - Format date for RSS (RFC 2822)
+//!
+//! **Image Processing:**
+//! - `image_dimensions(path)` - Get image width and height
+//! - `image_resize(input, output, options)` - Resize image
+//! - `image_convert(input, output, options?)` - Convert image format
+//! - `image_optimize(input, output, options?)` - Optimize/compress image
+//!
+//! **Asset Building:**
+//! - `build_css(pattern, output, options?)` - Build and concatenate CSS files
+//!
+//! **Text Processing:**
+//! - `slugify(text)` - Convert text to URL-friendly slug
+//! - `word_count(text)` - Count words in text
+//! - `reading_time(text, wpm?)` - Calculate reading time in minutes
+//! - `truncate(text, len, suffix?)` - Truncate text with optional suffix
+//! - `strip_tags(html)` - Remove HTML tags
+//! - `format_date(date, format)` - Format a date string
+//! - `parse_date(str)` - Parse date string to table {year, month, day}
+//! - `hash(content)` - Hash content (xxHash64)
+//! - `hash_file(path)` - Hash file contents
+//! - `url_encode(str)` - URL encode a string
+//! - `url_decode(str)` - URL decode a string
+//!
+//! **Path Utilities:**
+//! - `join_path(...)` - Join path segments
+//! - `basename(path)` - Get file name from path
+//! - `dirname(path)` - Get directory from path
+//! - `extension(path)` - Get file extension
+//!
+//! **Collections:**
+//! - `filter(items, fn)` - Filter items where fn returns true
+//! - `sort(items, fn)` - Sort items using comparator
+//! - `map(items, fn)` - Transform each item
+//! - `find(items, fn)` - Find first item where fn returns true
+//! - `group_by(items, key_fn)` - Group items by key
+//! - `unique(items)` - Remove duplicates
+//! - `reverse(items)` - Reverse array order
+//! - `take(items, n)` - Take first n items
+//! - `skip(items, n)` - Skip first n items
+//! - `keys(table)` - Get all keys from a table
+//! - `values(table)` - Get all values from a table
+//!
+//! **Environment:**
 //! - `env(name)` - Get environment variable
 //! - `print(...)` - Log output to build log
 //!
-//! All file operations respect the sandbox setting.
+//! All file operations respect the sandbox setting and are tracked for incremental builds.
 //!
 //! ## Root Pages
 //!
@@ -203,26 +228,19 @@
 //! ## Modules
 //!
 //! - [`config`] - Configuration loading and structures
-//! - [`content`] - Content discovery and post/page models
 //! - [`markdown`] - Markdown processing pipeline
 //! - [`templates`] - Tera template rendering
 //! - [`encryption`] - AES-GCM encryption for protected content
-//! - [`links`] - Link graph and backlink generation
-//! - [`rss`] - RSS feed generation
-//! - [`text`] - Plain text output for curl-friendly access
-//! - [`assets`] - CSS building and image optimization
 //! - [`build`] - Main build orchestrator
 
 pub mod assets;
 pub mod build;
 pub mod config;
-pub mod content;
 pub mod data;
 pub mod encryption;
 pub mod git;
-pub mod links;
+pub mod lua;
 pub mod markdown;
-pub mod rss;
 pub mod templates;
 pub mod text;
 pub mod watch;

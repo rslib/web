@@ -6,8 +6,10 @@
 use anyhow::{Context, Result};
 use mlua::{Function, Lua, LuaSerdeExt, Table, Value};
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::lua::{BuildTracker, SharedTracker};
 
 /// Configuration data structure (deserializable from Lua)
 #[derive(Debug, Clone)]
@@ -15,16 +17,8 @@ pub struct ConfigData {
     pub site: SiteConfig,
     pub seo: SeoConfig,
     pub build: BuildConfig,
-    pub images: ImagesConfig,
-    pub highlight: HighlightConfig,
     pub paths: PathsConfig,
-    pub templates: TemplatesConfig,
-    pub permalinks: PermalinksConfig,
     pub encryption: EncryptionConfig,
-    pub graph: GraphConfig,
-    pub rss: RssConfig,
-    pub text: TextConfig,
-    pub sections: SectionsConfig,
 }
 
 /// Main configuration structure with embedded Lua state
@@ -32,16 +26,18 @@ pub struct Config {
     // Configuration data
     pub data: ConfigData,
 
-    // Lua runtime state (for computed values, filters, sort functions)
+    // Lua runtime state
     lua: Lua,
-    computed: HashMap<String, mlua::RegistryKey>,
-    filters: HashMap<String, mlua::RegistryKey>,
-    functions: HashMap<String, mlua::RegistryKey>,
-    computed_pages: Option<mlua::RegistryKey>,
-    sort_fns: HashMap<String, mlua::RegistryKey>,
-    filter_fns: HashMap<String, mlua::RegistryKey>,
     before_build: Option<mlua::RegistryKey>,
     after_build: Option<mlua::RegistryKey>,
+
+    // Data-driven page generation
+    data_fn: Option<mlua::RegistryKey>,
+    pages_fn: Option<mlua::RegistryKey>,
+    update_data_fn: Option<mlua::RegistryKey>,
+
+    // Build dependency tracker
+    tracker: SharedTracker,
 }
 
 // Provide convenient access to data fields
@@ -75,82 +71,28 @@ pub struct SeoConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct BuildConfig {
     pub output_dir: String,
-    #[serde(default = "default_true")]
-    pub minify_css: bool,
-    #[serde(default = "default_css_output")]
-    pub css_output: String,
-}
-
-fn default_css_output() -> String {
-    "rs.css".to_string()
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct ImagesConfig {
-    #[serde(default = "default_quality")]
-    pub quality: f32,
-    #[serde(default = "default_scale_factor")]
-    pub scale_factor: f64,
-}
-
-fn default_quality() -> f32 {
-    85.0
-}
-
-fn default_scale_factor() -> f64 {
-    1.0
-}
-
-#[derive(Debug, Deserialize, Clone, Default)]
-pub struct HighlightConfig {
-    #[serde(default)]
-    pub names: Vec<String>,
-    #[serde(default = "default_highlight_class")]
-    pub class: String,
-}
-
-fn default_highlight_class() -> String {
-    "me".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct PathsConfig {
-    #[serde(default = "default_content_dir")]
-    pub content: String,
     #[serde(default = "default_styles_dir")]
     pub styles: String,
     #[serde(default = "default_static_dir")]
     pub static_files: String,
     #[serde(default = "default_templates_dir")]
     pub templates: String,
-    #[serde(default = "default_home_page")]
-    pub home: String,
-    #[serde(default)]
-    pub exclude: Vec<String>,
-    #[serde(default = "default_true")]
-    pub exclude_defaults: bool,
-    #[serde(default = "default_true")]
-    pub respect_gitignore: bool,
 }
 
 impl Default for PathsConfig {
     fn default() -> Self {
         Self {
-            content: default_content_dir(),
             styles: default_styles_dir(),
             static_files: default_static_dir(),
             templates: default_templates_dir(),
-            home: default_home_page(),
-            exclude: Vec::new(),
-            exclude_defaults: true,
-            respect_gitignore: true,
         }
     }
 }
 
-fn default_content_dir() -> String {
-    "content".to_string()
-}
 fn default_styles_dir() -> String {
     "styles".to_string()
 }
@@ -160,23 +102,6 @@ fn default_static_dir() -> String {
 fn default_templates_dir() -> String {
     "templates".to_string()
 }
-fn default_home_page() -> String {
-    "index.md".to_string()
-}
-
-/// Template mapping: section name -> template file
-#[derive(Debug, Deserialize, Clone, Default)]
-pub struct TemplatesConfig {
-    #[serde(flatten)]
-    pub sections: HashMap<String, String>,
-}
-
-/// Permalink patterns: section name -> pattern
-#[derive(Debug, Deserialize, Clone, Default)]
-pub struct PermalinksConfig {
-    #[serde(flatten)]
-    pub sections: HashMap<String, String>,
-}
 
 /// Encryption config for password-protected posts
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -185,136 +110,32 @@ pub struct EncryptionConfig {
     pub password: Option<String>,
 }
 
-/// Graph visualization config
-#[derive(Debug, Deserialize, Clone)]
-pub struct GraphConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default = "default_graph_template")]
-    pub template: String,
-    #[serde(default = "default_graph_path")]
+/// Page definition
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct PageDef {
+    /// URL path (e.g., "/blog/hello/") - must end with /
     pub path: String,
-}
-
-impl Default for GraphConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            template: default_graph_template(),
-            path: default_graph_path(),
-        }
-    }
-}
-
-fn default_graph_template() -> String {
-    "graph.html".to_string()
-}
-
-fn default_graph_path() -> String {
-    "graph".to_string()
-}
-
-/// RSS feed config
-#[derive(Debug, Deserialize, Clone)]
-pub struct RssConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default = "default_rss_filename")]
-    pub filename: String,
+    /// Template file to use (e.g., "post.html"). If not set, outputs html directly.
     #[serde(default)]
-    pub sections: Vec<String>,
-    #[serde(default = "default_rss_limit")]
-    pub limit: usize,
+    pub template: Option<String>,
+    /// Page title (for <title> and ctx.page.title)
     #[serde(default)]
-    pub exclude_encrypted_blocks: bool,
-}
-
-impl Default for RssConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            filename: default_rss_filename(),
-            sections: Vec::new(),
-            limit: default_rss_limit(),
-            exclude_encrypted_blocks: false,
-        }
-    }
-}
-
-fn default_rss_filename() -> String {
-    "rss.xml".to_string()
-}
-
-fn default_rss_limit() -> usize {
-    20
-}
-
-/// Plain text output config
-#[derive(Debug, Deserialize, Clone)]
-pub struct TextConfig {
+    pub title: Option<String>,
+    /// Meta description
     #[serde(default)]
-    pub enabled: bool,
+    pub description: Option<String>,
+    /// OG image path
     #[serde(default)]
-    pub sections: Vec<String>,
+    pub image: Option<String>,
+    /// Raw markdown content to render (becomes ctx.page.content as HTML)
     #[serde(default)]
-    pub exclude_encrypted: bool,
-    #[serde(default = "default_true")]
-    pub include_home: bool,
-}
-
-impl Default for TextConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            sections: Vec::new(),
-            exclude_encrypted: false,
-            include_home: true,
-        }
-    }
-}
-
-/// Section-specific configuration
-#[derive(Debug, Deserialize, Clone, Default)]
-pub struct SectionsConfig {
-    #[serde(flatten)]
-    pub sections: HashMap<String, SectionConfig>,
-}
-
-/// Configuration for a single section
-#[derive(Debug, Deserialize, Clone)]
-pub struct SectionConfig {
-    /// How to iterate content: "files" (default) or "directories"
-    #[serde(default = "default_iterate")]
-    pub iterate: String,
-}
-
-impl Default for SectionConfig {
-    fn default() -> Self {
-        Self {
-            iterate: default_iterate(),
-        }
-    }
-}
-
-fn default_iterate() -> String {
-    "files".to_string()
-}
-
-fn default_true() -> bool {
-    true
-}
-
-/// A computed page to be generated
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct ComputedPage {
-    /// URL path (e.g., "/tags/array/")
-    pub path: String,
-    /// Template to use (e.g., "tag.html")
-    pub template: String,
-    /// Page title
-    pub title: String,
-    /// Custom data available in template as `page.data`
-    pub data: serde_json::Value,
+    pub content: Option<String>,
+    /// Pre-rendered HTML (skips markdown processing)
+    #[serde(default)]
+    pub html: Option<String>,
+    /// Page-specific data (available as ctx.page.data.*)
+    #[serde(default)]
+    pub data: Option<serde_json::Value>,
 }
 
 impl Config {
@@ -325,19 +146,22 @@ impl Config {
         Self {
             data,
             lua,
-            computed: HashMap::new(),
-            filters: HashMap::new(),
-            functions: HashMap::new(),
-            computed_pages: None,
-            sort_fns: HashMap::new(),
-            filter_fns: HashMap::new(),
             before_build: None,
             after_build: None,
+            data_fn: None,
+            pages_fn: None,
+            update_data_fn: None,
+            tracker: Arc::new(BuildTracker::disabled()),
         }
     }
 
     /// Load config from a Lua file
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::load_with_tracker(path, Arc::new(BuildTracker::new()))
+    }
+
+    /// Load config with a custom tracker
+    pub fn load_with_tracker<P: AsRef<Path>>(path: P, tracker: SharedTracker) -> Result<Self> {
         let path = path.as_ref();
 
         // Determine actual config file path
@@ -370,7 +194,7 @@ impl Config {
             .unwrap_or_else(|_| project_root.clone());
 
         // First pass: register functions without sandbox to load config
-        register_lua_functions(&lua, &project_root, false)
+        crate::lua::register(&lua, &project_root, false, tracker.clone())
             .map_err(|e| anyhow::anyhow!("Failed to register Lua functions: {}", e))?;
 
         // Load and execute the config file
@@ -394,37 +218,35 @@ impl Config {
 
         // Re-register functions with proper sandbox setting if sandbox is enabled
         if sandbox {
-            register_lua_functions(&lua, &project_root, true)
+            crate::lua::register(&lua, &project_root, true, tracker.clone())
                 .map_err(|e| anyhow::anyhow!("Failed to register Lua functions: {}", e))?;
         }
 
         // Parse the config table
-        let mut sort_fns = HashMap::new();
-        let mut filter_fns = HashMap::new();
-        let data = parse_config(&lua, &config_table, &mut sort_fns, &mut filter_fns)
+        let data = parse_config(&lua, &config_table)
             .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
 
-        // Extract computed functions
-        let computed = extract_functions(&lua, &config_table, "computed")
-            .map_err(|e| anyhow::anyhow!("Failed to extract computed functions: {}", e))?;
+        // Extract data-driven functions
+        let data_fn: Option<mlua::RegistryKey> = config_table
+            .get::<Function>("data")
+            .ok()
+            .map(|f| lua.create_registry_value(f))
+            .transpose()
+            .map_err(|e| anyhow::anyhow!("Failed to store data function: {}", e))?;
 
-        // Extract filter functions
-        let filters = extract_functions(&lua, &config_table, "filters")
-            .map_err(|e| anyhow::anyhow!("Failed to extract filter functions: {}", e))?;
+        let pages_fn: Option<mlua::RegistryKey> = config_table
+            .get::<Function>("pages")
+            .ok()
+            .map(|f| lua.create_registry_value(f))
+            .transpose()
+            .map_err(|e| anyhow::anyhow!("Failed to store pages function: {}", e))?;
 
-        // Extract custom template functions
-        let functions = extract_functions(&lua, &config_table, "functions")
-            .map_err(|e| anyhow::anyhow!("Failed to extract custom functions: {}", e))?;
-
-        // Extract computed_pages function
-        let computed_pages = if let Ok(func) = config_table.get::<Function>("computed_pages") {
-            Some(
-                lua.create_registry_value(func)
-                    .map_err(|e| anyhow::anyhow!("Failed to store computed_pages: {}", e))?,
-            )
-        } else {
-            None
-        };
+        let update_data_fn: Option<mlua::RegistryKey> = config_table
+            .get::<Function>("update_data")
+            .ok()
+            .map(|f| lua.create_registry_value(f))
+            .transpose()
+            .map_err(|e| anyhow::anyhow!("Failed to store update_data function: {}", e))?;
 
         // Extract hooks
         let hooks: Option<Table> = config_table.get("hooks").ok();
@@ -450,801 +272,198 @@ impl Config {
         Ok(Config {
             data,
             lua,
-            computed,
-            filters,
-            functions,
-            computed_pages,
-            sort_fns,
-            filter_fns,
             before_build,
             after_build,
+            data_fn,
+            pages_fn,
+            update_data_fn,
+            tracker,
         })
     }
 
-    /// Call a computed function with sections data
-    pub fn call_computed(&self, name: &str, sections_json: &str) -> Result<serde_json::Value> {
-        let key = self
-            .computed
-            .get(name)
-            .with_context(|| format!("Computed function '{}' not found", name))?;
-
-        let func: Function = self
-            .lua
-            .registry_value(key)
-            .map_err(|e| anyhow::anyhow!("Failed to get computed function: {}", e))?;
-
-        let json_value: serde_json::Value = serde_json::from_str(sections_json)
-            .map_err(|e| anyhow::anyhow!("Invalid JSON: {}", e))?;
-        let sections: Value = self
-            .lua
-            .to_value(&json_value)
-            .map_err(|e| anyhow::anyhow!("Failed to convert to Lua: {}", e))?;
-
-        let result: Value = func
-            .call(sections)
-            .map_err(|e| anyhow::anyhow!("Failed to call computed '{}': {}", name, e))?;
-        let json_value: serde_json::Value = self
-            .lua
-            .from_value(result)
-            .map_err(|e| anyhow::anyhow!("Failed to convert result: {}", e))?;
-
-        Ok(json_value)
+    /// Get a reference to the build tracker
+    pub fn tracker(&self) -> &SharedTracker {
+        &self.tracker
     }
 
-    /// Check if a section has a custom sort function
-    pub fn has_sort_fn(&self, section_name: &str) -> bool {
-        self.sort_fns.contains_key(section_name)
-    }
-
-    /// Call the sort function for a section (C-style comparator: returns -1, 0, 1)
-    pub fn call_sort_fn(
-        &self,
-        section_name: &str,
-        a_json: &serde_json::Value,
-        b_json: &serde_json::Value,
-    ) -> Result<std::cmp::Ordering> {
-        let key = self
-            .sort_fns
-            .get(section_name)
-            .with_context(|| format!("Sort function for '{}' not found", section_name))?;
-
-        let func: Function = self
-            .lua
-            .registry_value(key)
-            .map_err(|e| anyhow::anyhow!("Failed to get sort function: {}", e))?;
-
-        let a: Value = self
-            .lua
-            .to_value(a_json)
-            .map_err(|e| anyhow::anyhow!("Failed to convert a to Lua: {}", e))?;
-        let b: Value = self
-            .lua
-            .to_value(b_json)
-            .map_err(|e| anyhow::anyhow!("Failed to convert b to Lua: {}", e))?;
-
-        let result: i32 = func
-            .call((a, b))
-            .map_err(|e| anyhow::anyhow!("Sort function failed: {}", e))?;
-
-        Ok(match result {
-            n if n < 0 => std::cmp::Ordering::Less,
-            n if n > 0 => std::cmp::Ordering::Greater,
-            _ => std::cmp::Ordering::Equal,
-        })
-    }
-
-    /// Check if a section has a custom filter function
-    pub fn has_filter_fn(&self, section_name: &str) -> bool {
-        self.filter_fns.contains_key(section_name)
-    }
-
-    /// Call the filter function for a section (returns true to keep, false to exclude)
-    pub fn call_filter_fn(
-        &self,
-        section_name: &str,
-        post_json: &serde_json::Value,
-    ) -> Result<bool> {
-        let key = self
-            .filter_fns
-            .get(section_name)
-            .with_context(|| format!("Filter function for '{}' not found", section_name))?;
-
-        let func: Function = self
-            .lua
-            .registry_value(key)
-            .map_err(|e| anyhow::anyhow!("Failed to get filter function: {}", e))?;
-
-        let post: Value = self
-            .lua
-            .to_value(post_json)
-            .map_err(|e| anyhow::anyhow!("Failed to convert post to Lua: {}", e))?;
-
-        let result: bool = func
-            .call(post)
-            .map_err(|e| anyhow::anyhow!("Filter function failed: {}", e))?;
-
-        Ok(result)
-    }
-
-    /// Get all computed function names
-    pub fn computed_names(&self) -> Vec<&str> {
-        self.computed.keys().map(|s| s.as_str()).collect()
-    }
-
-    /// Get all filter function names
-    pub fn filter_names(&self) -> Vec<&str> {
-        self.filters.keys().map(|s| s.as_str()).collect()
-    }
-
-    /// Check if computed_pages function exists
-    pub fn has_computed_pages(&self) -> bool {
-        self.computed_pages.is_some()
-    }
-
-    /// Call before_build hook
+    /// Call before_build hook with ctx
     pub fn call_before_build(&self) -> Result<()> {
         if let Some(ref key) = self.before_build {
             let func: Function = self
                 .lua
                 .registry_value(key)
                 .map_err(|e| anyhow::anyhow!("Failed to get before_build: {}", e))?;
-            func.call::<()>(())
+            let ctx = self.create_ctx(None)?;
+            func.call::<()>(ctx)
                 .map_err(|e| anyhow::anyhow!("before_build hook failed: {}", e))?;
         }
         Ok(())
     }
 
-    /// Call after_build hook
+    /// Call after_build hook with ctx
     pub fn call_after_build(&self) -> Result<()> {
         if let Some(ref key) = self.after_build {
             let func: Function = self
                 .lua
                 .registry_value(key)
                 .map_err(|e| anyhow::anyhow!("Failed to get after_build: {}", e))?;
-            func.call::<()>(())
+            let ctx = self.create_ctx(None)?;
+            func.call::<()>(ctx)
                 .map_err(|e| anyhow::anyhow!("after_build hook failed: {}", e))?;
         }
         Ok(())
     }
 
-    /// Call a filter function with a value
-    pub fn call_filter(&self, name: &str, value: &str) -> Result<String> {
-        let key = self
-            .filters
-            .get(name)
-            .with_context(|| format!("Filter '{}' not found", name))?;
-
-        let func: Function = self
+    /// Create context table for Lua functions
+    fn create_ctx(&self, data: Option<&serde_json::Value>) -> Result<Value> {
+        let ctx = self
             .lua
-            .registry_value(key)
-            .map_err(|e| anyhow::anyhow!("Failed to get filter: {}", e))?;
+            .create_table()
+            .map_err(|e| anyhow::anyhow!("Failed to create ctx: {}", e))?;
 
-        let result: String = func
-            .call(value.to_string())
-            .map_err(|e| anyhow::anyhow!("Filter '{}' failed: {}", name, e))?;
+        ctx.set("output_dir", self.data.build.output_dir.as_str())
+            .map_err(|e| anyhow::anyhow!("Failed to set output_dir: {}", e))?;
+        ctx.set("base_url", self.data.site.base_url.as_str())
+            .map_err(|e| anyhow::anyhow!("Failed to set base_url: {}", e))?;
 
-        Ok(result)
+        if let Some(data) = data {
+            let data_value: Value = self
+                .lua
+                .to_value(data)
+                .map_err(|e| anyhow::anyhow!("Failed to convert data to Lua: {}", e))?;
+            ctx.set("data", data_value)
+                .map_err(|e| anyhow::anyhow!("Failed to set data: {}", e))?;
+        }
+
+        Ok(Value::Table(ctx))
     }
 
-    /// Call a custom template function
-    pub fn call_function(
-        &self,
-        name: &str,
-        args: Vec<serde_json::Value>,
-    ) -> Result<serde_json::Value> {
-        let key = self
-            .functions
-            .get(name)
-            .with_context(|| format!("Function '{}' not found", name))?;
-
-        let func: Function = self
-            .lua
-            .registry_value(key)
-            .map_err(|e| anyhow::anyhow!("Failed to get function: {}", e))?;
-
-        let lua_args: Vec<Value> = args
-            .into_iter()
-            .map(|v| self.lua.to_value(&v))
-            .collect::<mlua::Result<Vec<_>>>()
-            .map_err(|e| anyhow::anyhow!("Failed to convert args: {}", e))?;
-
-        let result: Value = func
-            .call(mlua::MultiValue::from_iter(lua_args))
-            .map_err(|e| anyhow::anyhow!("Function '{}' failed: {}", name, e))?;
-
-        let json_result: serde_json::Value = self
-            .lua
-            .from_value(result)
-            .map_err(|e| anyhow::anyhow!("Failed to convert result: {}", e))?;
-
-        Ok(json_result)
-    }
-
-    /// Get all custom function names
-    pub fn function_names(&self) -> Vec<&str> {
-        self.functions.keys().map(|s| s.as_str()).collect()
-    }
-
-    /// Call computed_pages function to generate dynamic pages
-    pub fn call_computed_pages(&self, sections_json: &str) -> Result<Vec<ComputedPage>> {
-        let key = match &self.computed_pages {
+    /// Call the data(ctx) function to get global template data
+    pub fn call_data(&self) -> Result<serde_json::Value> {
+        let key = match &self.data_fn {
             Some(k) => k,
-            None => return Ok(Vec::new()),
+            _ => return Ok(serde_json::Value::Object(serde_json::Map::new())),
         };
 
         let func: Function = self
             .lua
             .registry_value(key)
-            .map_err(|e| anyhow::anyhow!("Failed to get computed_pages: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to get data function: {}", e))?;
 
-        let json_value: serde_json::Value = serde_json::from_str(sections_json)
-            .map_err(|e| anyhow::anyhow!("Invalid JSON: {}", e))?;
-        let sections: Value = self
-            .lua
-            .to_value(&json_value)
-            .map_err(|e| anyhow::anyhow!("Failed to convert to Lua: {}", e))?;
+        let ctx = self.create_ctx(None)?;
 
         let result: Value = func
-            .call(sections)
-            .map_err(|e| anyhow::anyhow!("Failed to call computed_pages: {}", e))?;
-        let pages: Vec<ComputedPage> = self
+            .call(ctx)
+            .map_err(|e| anyhow::anyhow!("Failed to call data(): {}", e))?;
+        let json_value: serde_json::Value = self
             .lua
             .from_value(result)
-            .map_err(|e| anyhow::anyhow!("Failed to convert result: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to convert data() result: {}", e))?;
+
+        Ok(json_value)
+    }
+
+    /// Call the pages(ctx) function to get page definitions
+    /// ctx.data contains the result from data()
+    pub fn call_pages(&self, global_data: &serde_json::Value) -> Result<Vec<PageDef>> {
+        let key = match &self.pages_fn {
+            Some(k) => k,
+            _ => return Ok(Vec::new()),
+        };
+
+        let func: Function = self
+            .lua
+            .registry_value(key)
+            .map_err(|e| anyhow::anyhow!("Failed to get pages function: {}", e))?;
+
+        let ctx = self.create_ctx(Some(global_data))?;
+
+        let result: Value = func
+            .call(ctx)
+            .map_err(|e| anyhow::anyhow!("Failed to call pages(): {}", e))?;
+        let pages: Vec<PageDef> = self
+            .lua
+            .from_value(result)
+            .map_err(|e| anyhow::anyhow!("Failed to convert pages() result: {}", e))?;
 
         Ok(pages)
     }
-}
 
-/// Check if a path is within the project root (for sandbox mode)
-fn is_path_within_root(path: &Path, root: &Path) -> bool {
-    // Try to canonicalize the path, handling both existing and non-existing paths
-    let resolved = if path.exists() {
-        path.canonicalize().ok()
-    } else {
-        // For non-existing paths, canonicalize the parent and append the filename
-        path.parent()
-            .map(|p| {
-                if p.as_os_str().is_empty() {
-                    PathBuf::from(".")
-                } else {
-                    p.to_path_buf()
-                }
-            })
-            .and_then(|p| p.canonicalize().ok())
-            .map(|p| p.join(path.file_name().unwrap_or_default()))
-    };
-
-    match resolved {
-        Some(abs_path) => abs_path.starts_with(root),
-        None => false,
+    /// Check if update_data function is defined
+    pub fn has_update_data(&self) -> bool {
+        self.update_data_fn.is_some()
     }
-}
 
-/// Resolve a path relative to project root
-fn resolve_path(path: &str, root: &Path) -> PathBuf {
-    let p = Path::new(path);
-    if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        root.join(p)
-    }
-}
-
-/// Register helper functions available in config.lua
-fn register_lua_functions(lua: &Lua, project_root: &Path, sandbox: bool) -> mlua::Result<()> {
-    let globals = lua.globals();
-
-    // Store sandbox settings in Lua for reference
-    globals.set("__sandbox_enabled", sandbox)?;
-    globals.set("__project_root", project_root.to_string_lossy().to_string())?;
-
-    let root = project_root.to_path_buf();
-
-    // load_json(path) - Load and parse a JSON file
-    let root_clone = root.clone();
-    let load_json = lua.create_function(move |lua, path: String| {
-        let resolved = resolve_path(&path, &root_clone);
-        if sandbox && !is_path_within_root(&resolved, &root_clone) {
-            return Err(mlua::Error::RuntimeError(format!(
-                "Sandbox: cannot access '{}' outside project directory. Set lua.sandbox = false to disable.",
-                path
-            )));
-        }
-
-        let content = match std::fs::read_to_string(&resolved) {
-            Ok(c) => c,
-            Err(_) => return Ok(Value::Nil),
+    /// Call update_data(ctx) for incremental updates
+    /// ctx.data = cached data, ctx.changed_paths = list of changed paths
+    pub fn call_update_data(
+        &self,
+        cached_data: &serde_json::Value,
+        changed_paths: &[std::path::PathBuf],
+    ) -> Result<serde_json::Value> {
+        let key = match &self.update_data_fn {
+            Some(k) => k,
+            None => return Err(anyhow::anyhow!("update_data function not defined")),
         };
 
-        match serde_json::from_str::<serde_json::Value>(&content) {
-            Ok(v) => lua.to_value(&v),
-            Err(_) => Ok(Value::Nil),
+        let func: Function = self
+            .lua
+            .registry_value(key)
+            .map_err(|e| anyhow::anyhow!("Failed to get update_data function: {}", e))?;
+
+        // Create ctx with cached data and changed paths
+        let ctx = self
+            .lua
+            .create_table()
+            .map_err(|e| anyhow::anyhow!("Failed to create ctx: {}", e))?;
+
+        ctx.set("output_dir", self.data.build.output_dir.as_str())
+            .map_err(|e| anyhow::anyhow!("Failed to set output_dir: {}", e))?;
+        ctx.set("base_url", self.data.site.base_url.as_str())
+            .map_err(|e| anyhow::anyhow!("Failed to set base_url: {}", e))?;
+
+        // Set cached data as ctx.data
+        let cached: Value = self
+            .lua
+            .to_value(cached_data)
+            .map_err(|e| anyhow::anyhow!("Failed to convert cached data to Lua: {}", e))?;
+        ctx.set("data", cached)
+            .map_err(|e| anyhow::anyhow!("Failed to set data: {}", e))?;
+
+        // Set changed paths as ctx.changed_paths
+        let paths_table = self.lua.create_table()?;
+        for (i, path) in changed_paths.iter().enumerate() {
+            paths_table.set(i + 1, path.to_string_lossy().to_string())?;
         }
-    })?;
-    globals.set("load_json", load_json)?;
+        ctx.set("changed_paths", paths_table)
+            .map_err(|e| anyhow::anyhow!("Failed to set changed_paths: {}", e))?;
 
-    // read_file(path) - Read a file as text
-    let root_clone = root.clone();
-    let read_file = lua.create_function(move |lua, path: String| {
-        let resolved = resolve_path(&path, &root_clone);
-        if sandbox && !is_path_within_root(&resolved, &root_clone) {
-            return Err(mlua::Error::RuntimeError(format!(
-                "Sandbox: cannot access '{}' outside project directory. Set lua.sandbox = false to disable.",
-                path
-            )));
-        }
+        let result: Value = func
+            .call(Value::Table(ctx))
+            .map_err(|e| anyhow::anyhow!("Failed to call update_data(): {}", e))?;
 
-        match std::fs::read_to_string(&resolved) {
-            Ok(content) => Ok(Value::String(lua.create_string(&content)?)),
-            Err(_) => Ok(Value::Nil),
-        }
-    })?;
-    globals.set("read_file", read_file)?;
+        let json_value: serde_json::Value = self
+            .lua
+            .from_value(result)
+            .map_err(|e| anyhow::anyhow!("Failed to convert update_data() result: {}", e))?;
 
-    // file_exists(path) - Check if a file exists
-    let root_clone = root.clone();
-    let file_exists = lua.create_function(move |_, path: String| {
-        let resolved = resolve_path(&path, &root_clone);
-        if sandbox && !is_path_within_root(&resolved, &root_clone) {
-            return Err(mlua::Error::RuntimeError(format!(
-                "Sandbox: cannot access '{}' outside project directory. Set lua.sandbox = false to disable.",
-                path
-            )));
-        }
-        Ok(resolved.exists())
-    })?;
-    globals.set("file_exists", file_exists)?;
-
-    // list_files(path, pattern?) - List files in directory
-    let root_clone = root.clone();
-    let list_files = lua.create_function(move |lua, (path, pattern): (String, Option<String>)| {
-        let resolved = resolve_path(&path, &root_clone);
-        if sandbox && !is_path_within_root(&resolved, &root_clone) {
-            return Err(mlua::Error::RuntimeError(format!(
-                "Sandbox: cannot access '{}' outside project directory. Set lua.sandbox = false to disable.",
-                path
-            )));
-        }
-
-        let pattern = pattern.unwrap_or_else(|| "*".to_string());
-        let glob_pattern = format!("{}/{}", resolved.display(), pattern);
-
-        let mut files = Vec::new();
-        if let Ok(entries) = glob::glob(&glob_pattern) {
-            for entry in entries.flatten() {
-                // Skip files outside sandbox (in case glob pattern escapes)
-                if sandbox && !is_path_within_root(&entry, &root_clone) {
-                    continue;
-                }
-                if entry.is_file() {
-                    let table = lua.create_table()?;
-                    table.set("path", entry.to_string_lossy().to_string())?;
-                    table.set(
-                        "name",
-                        entry
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default(),
-                    )?;
-                    table.set(
-                        "stem",
-                        entry
-                            .file_stem()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default(),
-                    )?;
-                    table.set(
-                        "ext",
-                        entry
-                            .extension()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default(),
-                    )?;
-                    files.push(table);
-                }
-            }
-        }
-
-        let result = lua.create_table()?;
-        for (i, file) in files.into_iter().enumerate() {
-            result.set(i + 1, file)?;
-        }
-        Ok(result)
-    })?;
-    globals.set("list_files", list_files)?;
-
-    // list_dirs(path) - List subdirectories
-    let root_clone = root.clone();
-    let list_dirs = lua.create_function(move |lua, path: String| {
-        let resolved = resolve_path(&path, &root_clone);
-        if sandbox && !is_path_within_root(&resolved, &root_clone) {
-            return Err(mlua::Error::RuntimeError(format!(
-                "Sandbox: cannot access '{}' outside project directory. Set lua.sandbox = false to disable.",
-                path
-            )));
-        }
-
-        let mut dirs = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&resolved) {
-            for entry in entries.flatten() {
-                let entry_path = entry.path();
-                // Skip directories outside sandbox
-                if sandbox && !is_path_within_root(&entry_path, &root_clone) {
-                    continue;
-                }
-                if entry_path.is_dir()
-                    && let Some(name) = entry_path.file_name().and_then(|n| n.to_str())
-                    && !name.starts_with('.')
-                {
-                    dirs.push(name.to_string());
-                }
-            }
-        }
-        dirs.sort();
-
-        let result = lua.create_table()?;
-        for (i, dir) in dirs.into_iter().enumerate() {
-            result.set(i + 1, dir)?;
-        }
-        Ok(result)
-    })?;
-    globals.set("list_dirs", list_dirs)?;
-
-    // write_file(path, content) - Write content to a file
-    let root_clone = root.clone();
-    let write_file = lua.create_function(move |_, (path, content): (String, String)| {
-        let resolved = resolve_path(&path, &root_clone);
-        if sandbox && !is_path_within_root(&resolved, &root_clone) {
-            return Err(mlua::Error::RuntimeError(format!(
-                "Sandbox: cannot write '{}' outside project directory. Set lua.sandbox = false to disable.",
-                path
-            )));
-        }
-
-        // Create parent directories if needed
-        if let Some(parent) = resolved.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match std::fs::write(&resolved, &content) {
-            Ok(_) => Ok(true),
-            Err(_) => Ok(false),
-        }
-    })?;
-    globals.set("write_file", write_file)?;
-
-    // env(name) - Get environment variable
-    let env_fn = lua.create_function(|lua, name: String| match std::env::var(&name) {
-        Ok(val) => Ok(Value::String(lua.create_string(&val)?)),
-        Err(_) => Ok(Value::Nil),
-    })?;
-    globals.set("env", env_fn)?;
-
-    // print - Override print to use log::info
-    let print_fn = lua.create_function(|_, args: mlua::Variadic<String>| {
-        let msg = args
-            .iter()
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>()
-            .join("\t");
-        log::info!("[Lua] {}", msg);
-        Ok(())
-    })?;
-    globals.set("print", print_fn)?;
-
-    // Register async/await style helpers using coroutines
-    register_async_helpers(lua)?;
-
-    // Register parallel processing functions
-    register_parallel_functions(lua, project_root, sandbox)?;
-
-    Ok(())
-}
-
-/// Register async/await style helpers for coroutine-based concurrency
-fn register_async_helpers(lua: &Lua) -> mlua::Result<()> {
-    // Create async module
-    let async_code = r#"
-        local async = {}
-
-        -- Create a task from a function (wraps in coroutine)
-        function async.task(fn)
-            return {
-                _co = coroutine.create(fn),
-                _completed = false,
-                _result = nil,
-            }
-        end
-
-        -- Run a task to completion
-        function async.await(task)
-            if task._completed then
-                return task._result
-            end
-            while coroutine.status(task._co) ~= "dead" do
-                local ok, result = coroutine.resume(task._co)
-                if not ok then
-                    error(result)
-                end
-                task._result = result
-            end
-            task._completed = true
-            return task._result
-        end
-
-        -- Yield from current task (for cooperative multitasking)
-        function async.yield(value)
-            return coroutine.yield(value)
-        end
-
-        -- Run multiple tasks concurrently (interleaved execution)
-        function async.all(tasks)
-            local results = {}
-            local pending = {}
-
-            for i, task in ipairs(tasks) do
-                pending[i] = task
-                results[i] = nil
-            end
-
-            -- Round-robin execution until all complete
-            local any_pending = true
-            while any_pending do
-                any_pending = false
-                for i, task in ipairs(pending) do
-                    if task and coroutine.status(task._co) ~= "dead" then
-                        any_pending = true
-                        local ok, result = coroutine.resume(task._co)
-                        if not ok then
-                            error(result)
-                        end
-                        task._result = result
-                    elseif task then
-                        results[i] = task._result
-                        task._completed = true
-                        pending[i] = nil
-                    end
-                end
-            end
-
-            return results
-        end
-
-        -- Run tasks and return first completed result
-        function async.race(tasks)
-            while true do
-                for i, task in ipairs(tasks) do
-                    if coroutine.status(task._co) ~= "dead" then
-                        local ok, result = coroutine.resume(task._co)
-                        if not ok then
-                            error(result)
-                        end
-                        if coroutine.status(task._co) == "dead" then
-                            task._result = result
-                            task._completed = true
-                            return result, i
-                        end
-                    end
-                end
-            end
-        end
-
-        -- Sleep/delay (yields N times for cooperative scheduling)
-        function async.sleep(n)
-            for _ = 1, (n or 1) do
-                coroutine.yield()
-            end
-        end
-
-        return async
-    "#;
-
-    let async_module: Table = lua.load(async_code).eval()?;
-    lua.globals().set("async", async_module)?;
-
-    Ok(())
-}
-
-/// Register parallel processing functions
-fn register_parallel_functions(lua: &Lua, project_root: &Path, sandbox: bool) -> mlua::Result<()> {
-    let parallel = lua.create_table()?;
-    let root = project_root.to_path_buf();
-
-    // parallel.load_json(paths) - Load multiple JSON files in parallel
-    let root_clone = root.clone();
-    let load_json_parallel = lua.create_function(move |lua, paths: Table| {
-        use rayon::prelude::*;
-
-        // Collect paths from Lua table
-        let path_list: Vec<String> = paths
-            .sequence_values::<String>()
-            .filter_map(|r| r.ok())
-            .collect();
-
-        // Process in parallel
-        let results: Vec<Option<serde_json::Value>> = path_list
-            .par_iter()
-            .map(|path| {
-                let resolved = resolve_path(path, &root_clone);
-                if sandbox && !is_path_within_root(&resolved, &root_clone) {
-                    return None;
-                }
-                std::fs::read_to_string(&resolved)
-                    .ok()
-                    .and_then(|content| serde_json::from_str(&content).ok())
-            })
-            .collect();
-
-        // Convert results back to Lua table
-        let result_table = lua.create_table()?;
-        for (i, result) in results.into_iter().enumerate() {
-            match result {
-                Some(v) => result_table.set(i + 1, lua.to_value(&v)?)?,
-                None => result_table.set(i + 1, Value::Nil)?,
-            }
-        }
-        Ok(result_table)
-    })?;
-    parallel.set("load_json", load_json_parallel)?;
-
-    // parallel.read_files(paths) - Read multiple files in parallel
-    let root_clone = root.clone();
-    let read_files_parallel = lua.create_function(move |lua, paths: Table| {
-        use rayon::prelude::*;
-
-        let path_list: Vec<String> = paths
-            .sequence_values::<String>()
-            .filter_map(|r| r.ok())
-            .collect();
-
-        let results: Vec<Option<String>> = path_list
-            .par_iter()
-            .map(|path| {
-                let resolved = resolve_path(path, &root_clone);
-                if sandbox && !is_path_within_root(&resolved, &root_clone) {
-                    return None;
-                }
-                std::fs::read_to_string(&resolved).ok()
-            })
-            .collect();
-
-        let result_table = lua.create_table()?;
-        for (i, result) in results.into_iter().enumerate() {
-            match result {
-                Some(content) => result_table.set(i + 1, lua.create_string(&content)?)?,
-                None => result_table.set(i + 1, Value::Nil)?,
-            }
-        }
-        Ok(result_table)
-    })?;
-    parallel.set("read_files", read_files_parallel)?;
-
-    // parallel.file_exists(paths) - Check multiple files exist in parallel
-    let root_clone = root.clone();
-    let file_exists_parallel = lua.create_function(move |lua, paths: Table| {
-        use rayon::prelude::*;
-
-        let path_list: Vec<String> = paths
-            .sequence_values::<String>()
-            .filter_map(|r| r.ok())
-            .collect();
-
-        let results: Vec<bool> = path_list
-            .par_iter()
-            .map(|path| {
-                let resolved = resolve_path(path, &root_clone);
-                if sandbox && !is_path_within_root(&resolved, &root_clone) {
-                    return false;
-                }
-                resolved.exists()
-            })
-            .collect();
-
-        let result_table = lua.create_table()?;
-        for (i, exists) in results.into_iter().enumerate() {
-            result_table.set(i + 1, exists)?;
-        }
-        Ok(result_table)
-    })?;
-    parallel.set("file_exists", file_exists_parallel)?;
-
-    // parallel.map(items, fn) - Map over items, calling Lua function (sequential fn calls, parallel-ready structure)
-    let map_fn = lua.create_function(|lua, (items, func): (Table, Function)| {
-        let result_table = lua.create_table()?;
-        let mut i = 1;
-        for v in items.sequence_values::<Value>().flatten() {
-            let res: Value = func.call(v)?;
-            result_table.set(i, res)?;
-            i += 1;
-        }
-        Ok(result_table)
-    })?;
-    parallel.set("map", map_fn)?;
-
-    // parallel.filter(items, fn) - Filter items using predicate function
-    let filter_fn = lua.create_function(|lua, (items, func): (Table, Function)| {
-        let result_table = lua.create_table()?;
-        let mut i = 1;
-        for v in items.sequence_values::<Value>().flatten() {
-            let keep: bool = func.call(v.clone())?;
-            if keep {
-                result_table.set(i, v)?;
-                i += 1;
-            }
-        }
-        Ok(result_table)
-    })?;
-    parallel.set("filter", filter_fn)?;
-
-    // parallel.reduce(items, initial, fn) - Reduce items to single value
-    let reduce_fn =
-        lua.create_function(|_, (items, initial, func): (Table, Value, Function)| {
-            let mut acc = initial;
-            for v in items.sequence_values::<Value>().flatten() {
-                acc = func.call((acc, v))?;
-            }
-            Ok(acc)
-        })?;
-    parallel.set("reduce", reduce_fn)?;
-
-    lua.globals().set("parallel", parallel)?;
-    Ok(())
-}
-
-/// Extract functions from a table (computed or filters)
-fn extract_functions(
-    lua: &Lua,
-    config_table: &Table,
-    key: &str,
-) -> mlua::Result<HashMap<String, mlua::RegistryKey>> {
-    let mut functions = HashMap::new();
-
-    if let Ok(table) = config_table.get::<Table>(key) {
-        for pair in table.pairs::<String, Function>() {
-            let (name, func) = pair?;
-            let registry_key = lua.create_registry_value(func)?;
-            functions.insert(name, registry_key);
-        }
+        Ok(json_value)
     }
-
-    Ok(functions)
 }
-
 /// Parse the config table into ConfigData
-fn parse_config(
-    lua: &Lua,
-    table: &Table,
-    sort_fns: &mut HashMap<String, mlua::RegistryKey>,
-    section_filters: &mut HashMap<String, mlua::RegistryKey>,
-) -> mlua::Result<ConfigData> {
+fn parse_config(_lua: &Lua, table: &Table) -> mlua::Result<ConfigData> {
     let site = parse_site_config(table)?;
     let seo = parse_seo_config(table)?;
     let build = parse_build_config(table)?;
-    let images = parse_images_config(table)?;
-    let highlight = parse_highlight_config(table)?;
     let paths = parse_paths_config(table)?;
-    let templates = parse_templates_config(table)?;
-    let permalinks = parse_permalinks_config(table)?;
     let encryption = parse_encryption_config(table)?;
-    let graph = parse_graph_config(table)?;
-    let rss = parse_rss_config(table)?;
-    let text = parse_text_config(table)?;
-    let sections = parse_sections_config(lua, table, sort_fns, section_filters)?;
 
     Ok(ConfigData {
         site,
         seo,
         build,
-        images,
-        highlight,
         paths,
-        templates,
-        permalinks,
         encryption,
-        graph,
-        rss,
-        text,
-        sections,
     })
 }
 
@@ -1275,56 +494,13 @@ fn parse_build_config(table: &Table) -> mlua::Result<BuildConfig> {
         output_dir: build
             .get("output_dir")
             .unwrap_or_else(|_| "dist".to_string()),
-        minify_css: build.get("minify_css").unwrap_or(true),
-        css_output: build
-            .get("css_output")
-            .unwrap_or_else(|_| "rs.css".to_string()),
-    })
-}
-
-fn parse_images_config(table: &Table) -> mlua::Result<ImagesConfig> {
-    let images: Table = table.get("images").unwrap_or_else(|_| table.clone());
-
-    Ok(ImagesConfig {
-        quality: images.get("quality").unwrap_or(85.0),
-        scale_factor: images.get("scale_factor").unwrap_or(1.0),
-    })
-}
-
-fn parse_highlight_config(table: &Table) -> mlua::Result<HighlightConfig> {
-    let highlight: Table = table.get("highlight").unwrap_or_else(|_| table.clone());
-
-    let names: Vec<String> = highlight
-        .get::<Table>("names")
-        .map(|t| {
-            t.sequence_values::<String>()
-                .filter_map(|r| r.ok())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    Ok(HighlightConfig {
-        names,
-        class: highlight.get("class").unwrap_or_else(|_| "me".to_string()),
     })
 }
 
 fn parse_paths_config(table: &Table) -> mlua::Result<PathsConfig> {
     let paths: Table = table.get("paths").unwrap_or_else(|_| table.clone());
 
-    let exclude: Vec<String> = paths
-        .get::<Table>("exclude")
-        .map(|t| {
-            t.sequence_values::<String>()
-                .filter_map(|r| r.ok())
-                .collect()
-        })
-        .unwrap_or_default();
-
     Ok(PathsConfig {
-        content: paths
-            .get("content")
-            .unwrap_or_else(|_| "content".to_string()),
         styles: paths.get("styles").unwrap_or_else(|_| "styles".to_string()),
         static_files: paths
             .get("static_files")
@@ -1332,35 +508,7 @@ fn parse_paths_config(table: &Table) -> mlua::Result<PathsConfig> {
         templates: paths
             .get("templates")
             .unwrap_or_else(|_| "templates".to_string()),
-        home: paths.get("home").unwrap_or_else(|_| "index.md".to_string()),
-        exclude,
-        exclude_defaults: paths.get("exclude_defaults").unwrap_or(true),
-        respect_gitignore: paths.get("respect_gitignore").unwrap_or(true),
     })
-}
-
-fn parse_templates_config(table: &Table) -> mlua::Result<TemplatesConfig> {
-    let mut sections = HashMap::new();
-
-    if let Ok(templates) = table.get::<Table>("templates") {
-        for (k, v) in templates.pairs::<String, String>().flatten() {
-            sections.insert(k, v);
-        }
-    }
-
-    Ok(TemplatesConfig { sections })
-}
-
-fn parse_permalinks_config(table: &Table) -> mlua::Result<PermalinksConfig> {
-    let mut sections = HashMap::new();
-
-    if let Ok(permalinks) = table.get::<Table>("permalinks") {
-        for (k, v) in permalinks.pairs::<String, String>().flatten() {
-            sections.insert(k, v);
-        }
-    }
-
-    Ok(PermalinksConfig { sections })
 }
 
 fn parse_encryption_config(table: &Table) -> mlua::Result<EncryptionConfig> {
@@ -1372,107 +520,20 @@ fn parse_encryption_config(table: &Table) -> mlua::Result<EncryptionConfig> {
     })
 }
 
-fn parse_graph_config(table: &Table) -> mlua::Result<GraphConfig> {
-    let graph: Table = table.get("graph").unwrap_or_else(|_| table.clone());
-
-    Ok(GraphConfig {
-        enabled: graph.get("enabled").unwrap_or(true),
-        template: graph
-            .get("template")
-            .unwrap_or_else(|_| "graph.html".to_string()),
-        path: graph.get("path").unwrap_or_else(|_| "graph".to_string()),
-    })
-}
-
-fn parse_rss_config(table: &Table) -> mlua::Result<RssConfig> {
-    let rss: Table = table.get("rss").unwrap_or_else(|_| table.clone());
-
-    let sections: Vec<String> = rss
-        .get::<Table>("sections")
-        .map(|t| {
-            t.sequence_values::<String>()
-                .filter_map(|r| r.ok())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    Ok(RssConfig {
-        enabled: rss.get("enabled").unwrap_or(true),
-        filename: rss
-            .get("filename")
-            .unwrap_or_else(|_| "rss.xml".to_string()),
-        sections,
-        limit: rss.get("limit").unwrap_or(20),
-        exclude_encrypted_blocks: rss.get("exclude_encrypted_blocks").unwrap_or(false),
-    })
-}
-
-fn parse_text_config(table: &Table) -> mlua::Result<TextConfig> {
-    let text: Table = table.get("text").unwrap_or_else(|_| table.clone());
-
-    let sections: Vec<String> = text
-        .get::<Table>("sections")
-        .map(|t| {
-            t.sequence_values::<String>()
-                .filter_map(|r| r.ok())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    Ok(TextConfig {
-        enabled: text.get("enabled").unwrap_or(false),
-        sections,
-        exclude_encrypted: text.get("exclude_encrypted").unwrap_or(false),
-        include_home: text.get("include_home").unwrap_or(true),
-    })
-}
-
-fn parse_sections_config(
-    lua: &Lua,
-    table: &Table,
-    sort_fns: &mut HashMap<String, mlua::RegistryKey>,
-    filter_fns: &mut HashMap<String, mlua::RegistryKey>,
-) -> mlua::Result<SectionsConfig> {
-    let mut sections = HashMap::new();
-
-    if let Ok(sections_table) = table.get::<Table>("sections") {
-        for (name, section_table) in sections_table.pairs::<String, Table>().flatten() {
-            let iterate = section_table
-                .get("iterate")
-                .unwrap_or_else(|_| "files".to_string());
-
-            // Store sort function if provided
-            if let Ok(func) = section_table.get::<mlua::Function>("sort") {
-                let key = lua.create_registry_value(func)?;
-                sort_fns.insert(name.clone(), key);
-            }
-
-            // Store filter function if provided
-            if let Ok(func) = section_table.get::<mlua::Function>("filter") {
-                let key = lua.create_registry_value(func)?;
-                filter_fns.insert(name.clone(), key);
-            }
-
-            sections.insert(name, SectionConfig { iterate });
-        }
-    }
-
-    Ok(SectionsConfig { sections })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn test_project_root() -> PathBuf {
-        std::env::current_dir().unwrap()
+        std::env::current_dir().expect("failed to get current directory")
     }
 
     #[test]
     fn test_minimal_lua_config() {
         let lua = Lua::new();
         let root = test_project_root();
-        register_lua_functions(&lua, &root, false).unwrap();
+        crate::lua::register(&lua, &root, false, Arc::new(BuildTracker::disabled()))
+            .expect("failed to register Lua functions");
 
         let config_str = r#"
             return {
@@ -1488,10 +549,11 @@ mod tests {
             }
         "#;
 
-        let table: Table = lua.load(config_str).eval().unwrap();
-        let mut sort_fns = HashMap::new();
-        let mut filter_fns = HashMap::new();
-        let config = parse_config(&lua, &table, &mut sort_fns, &mut filter_fns).unwrap();
+        let table: Table = lua
+            .load(config_str)
+            .eval()
+            .expect("failed to load config string");
+        let config = parse_config(&lua, &table).expect("failed to parse config");
 
         assert_eq!(config.site.title, "Test Site");
         assert_eq!(config.site.base_url, "https://example.com");
@@ -1499,55 +561,23 @@ mod tests {
     }
 
     #[test]
-    fn test_lua_config_with_sections() {
-        let lua = Lua::new();
-        let root = test_project_root();
-        register_lua_functions(&lua, &root, false).unwrap();
-
-        let config_str = r#"
-            return {
-                site = {
-                    title = "Test",
-                    description = "Test",
-                    base_url = "https://example.com",
-                    author = "Test",
-                },
-                build = { output_dir = "dist" },
-                sections = {
-                    problems = { iterate = "directories" },
-                    blog = { iterate = "files" },
-                },
-            }
-        "#;
-
-        let table: Table = lua.load(config_str).eval().unwrap();
-        let mut sort_fns = HashMap::new();
-        let mut filter_fns = HashMap::new();
-        let config = parse_config(&lua, &table, &mut sort_fns, &mut filter_fns).unwrap();
-
-        let problems = config.sections.sections.get("problems");
-        assert!(problems.is_some());
-        assert_eq!(problems.unwrap().iterate, "directories");
-
-        let blog = config.sections.sections.get("blog");
-        assert!(blog.is_some());
-        assert_eq!(blog.unwrap().iterate, "files");
-    }
-
-    #[test]
     fn test_lua_helper_functions() {
         let lua = Lua::new();
         let root = test_project_root();
-        register_lua_functions(&lua, &root, false).unwrap();
+        crate::lua::register(&lua, &root, false, Arc::new(BuildTracker::disabled()))
+            .expect("failed to register Lua functions");
 
         // Test file_exists
-        let result: bool = lua.load("return file_exists('Cargo.toml')").eval().unwrap();
+        let result: bool = lua
+            .load("return rs.file_exists('Cargo.toml')")
+            .eval()
+            .expect("failed to eval file_exists for Cargo.toml");
         assert!(result);
 
         let result: bool = lua
-            .load("return file_exists('nonexistent.file')")
+            .load("return rs.file_exists('nonexistent.file')")
             .eval()
-            .unwrap();
+            .expect("failed to eval file_exists for nonexistent.file");
         assert!(!result);
     }
 
@@ -1555,29 +585,49 @@ mod tests {
     fn test_sandbox_blocks_outside_access() {
         let lua = Lua::new();
         let root = test_project_root();
-        register_lua_functions(&lua, &root, true).unwrap();
+        crate::lua::register(&lua, &root, true, Arc::new(BuildTracker::disabled()))
+            .expect("failed to register Lua functions");
 
         // Trying to access /etc/passwd should fail with sandbox enabled
-        let result = lua.load("return read_file('/etc/passwd')").eval::<Value>();
-        assert!(result.is_err());
+        let result = lua
+            .load("return rs.read_file('/etc/passwd')")
+            .eval::<Value>();
+        assert!(
+            result.is_err(),
+            "sandbox should block access to /etc/passwd"
+        );
 
         // Trying to access parent directory should fail
-        let result = lua.load("return read_file('../some_file')").eval::<Value>();
-        assert!(result.is_err());
+        let result = lua
+            .load("return rs.read_file('../some_file')")
+            .eval::<Value>();
+        assert!(
+            result.is_err(),
+            "sandbox should block access to parent directory"
+        );
     }
 
     #[test]
     fn test_sandbox_allows_project_access() {
         let lua = Lua::new();
         let root = test_project_root();
-        register_lua_functions(&lua, &root, true).unwrap();
+        crate::lua::register(&lua, &root, true, Arc::new(BuildTracker::disabled()))
+            .expect("failed to register Lua functions");
 
         // Accessing files within project should work
-        let result: bool = lua.load("return file_exists('Cargo.toml')").eval().unwrap();
+        let result: bool = lua
+            .load("return rs.file_exists('Cargo.toml')")
+            .eval()
+            .expect("sandbox should allow file_exists within project");
         assert!(result);
 
         // Reading files within project should work
-        let result = lua.load("return read_file('Cargo.toml')").eval::<Value>();
-        assert!(result.is_ok());
+        let result = lua
+            .load("return rs.read_file('Cargo.toml')")
+            .eval::<Value>();
+        assert!(
+            result.is_ok(),
+            "sandbox should allow reading files within project"
+        );
     }
 }

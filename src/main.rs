@@ -32,7 +32,7 @@ impl From<LogLevel> for LevelFilter {
 
 #[derive(Parser)]
 #[command(name = "rs-web")]
-#[command(about = "A custom static site generator", long_about = None)]
+#[command(about = "A data-driven static site generator", long_about = None)]
 struct Cli {
     /// Enable debug logging (shorthand for --log-level debug)
     #[arg(long, global = true)]
@@ -50,7 +50,7 @@ struct Cli {
 enum Commands {
     /// Build the static site
     Build {
-        /// Project directory containing config.lua or config.toml
+        /// Project directory containing config.lua
         #[arg(short = 'd', long = "dir")]
         directory: Option<PathBuf>,
 
@@ -62,27 +62,37 @@ enum Commands {
         #[arg(short, long)]
         watch: bool,
     },
+    /// Generate Lua API type definitions
+    Types {
+        /// Generate EmmyLua annotations (.lua file)
+        #[arg(long)]
+        lua: bool,
+
+        /// Generate Markdown documentation (.md file)
+        #[arg(long)]
+        markdown: bool,
+
+        /// Output directory (default: current directory)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 fn init_logger(debug: bool, log_level: Option<LogLevel>) {
     let level = if debug {
-        // --debug flag takes highest priority
         LevelFilter::Debug
     } else if let Some(level) = log_level {
-        // Explicit --log-level arg
         level.into()
     } else if let Ok(env_level) = std::env::var("RS_WEB_LOG_LEVEL") {
-        // Environment variable
         match env_level.to_lowercase().as_str() {
             "trace" => LevelFilter::Trace,
             "debug" => LevelFilter::Debug,
             "info" => LevelFilter::Info,
             "warning" | "warn" => LevelFilter::Warn,
             "error" => LevelFilter::Error,
-            _ => LevelFilter::Warn, // Invalid value, use default
+            _ => LevelFilter::Warn,
         }
     } else {
-        // Default
         LevelFilter::Warn
     };
 
@@ -96,7 +106,6 @@ fn init_logger(debug: bool, log_level: Option<LogLevel>) {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize logging
     init_logger(cli.debug, cli.log_level);
 
     match cli.command {
@@ -107,22 +116,20 @@ fn main() -> Result<()> {
         } => {
             let start = Instant::now();
 
-            // Determine project directory and change to it if specified
+            // Determine project directory
             let project_dir = directory.unwrap_or_else(|| PathBuf::from("."));
             let project_dir = project_dir.canonicalize().unwrap_or(project_dir);
 
             // Load config from project directory
             let mut config = Config::load(&project_dir)?;
 
-            // Allow overriding base_url via environment variable (useful for CI/CD)
+            // Allow overriding base_url via environment variable
             if let Ok(base_url) = std::env::var("SITE_BASE_URL") {
                 log::info!("Using base_url from SITE_BASE_URL: {}", base_url);
                 config.site.base_url = base_url;
             }
 
-            // Output directory:
-            // - If -o specified: relative to current working directory
-            // - If not specified: use config value relative to project directory
+            // Output directory
             let output_dir = if let Some(out) = output {
                 if out.is_absolute() {
                     out
@@ -142,6 +149,56 @@ fn main() -> Result<()> {
             // Watch mode
             if watch {
                 run_watch_loop(builder, &project_dir, &output_dir)?;
+            }
+        }
+        Commands::Types {
+            lua,
+            markdown,
+            output,
+        } => {
+            // Default to generating both if neither specified
+            let generate_lua = lua || !markdown;
+            let generate_markdown = markdown || !lua;
+
+            let output_path = output.unwrap_or_else(|| PathBuf::from("."));
+
+            // Check if output is a file path or directory
+            let is_file = output_path
+                .extension()
+                .map(|e| e == "lua" || e == "md")
+                .unwrap_or(false);
+
+            if is_file {
+                // Output to specific file
+                if let Some(parent) = output_path.parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let content = if output_path.extension().map(|e| e == "lua").unwrap_or(false) {
+                    rs_web::lua::generate_emmylua()
+                } else {
+                    rs_web::lua::generate_markdown()
+                };
+                std::fs::write(&output_path, content)?;
+                println!("Generated {}", output_path.display());
+            } else {
+                // Output to directory
+                std::fs::create_dir_all(&output_path)?;
+
+                if generate_lua {
+                    let content = rs_web::lua::generate_emmylua();
+                    let path = output_path.join("rs-web.lua");
+                    std::fs::write(&path, content)?;
+                    println!("Generated {}", path.display());
+                }
+
+                if generate_markdown {
+                    let content = rs_web::lua::generate_markdown();
+                    let path = output_path.join("LUA_API.md");
+                    std::fs::write(&path, content)?;
+                    println!("Generated {}", path.display());
+                }
             }
         }
     }

@@ -3,38 +3,76 @@ use log::{debug, info, trace};
 use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use crate::assets::{
-    ImageConfig, build_css, copy_single_static_file, copy_static_files, optimize_images,
-    optimize_single_image,
-};
-use crate::config::{ComputedPage, Config};
-use crate::content::{Content, ContentType, Post, discover_content};
-use crate::encryption::{encrypt_content, resolve_password};
-use crate::links::LinkGraph;
-use crate::markdown::{
-    Pipeline, TransformContext, extract_encrypted_blocks, extract_html_encrypted_blocks,
-    replace_placeholders,
-};
-use crate::rss::generate_rss;
+use crate::assets::copy_static_files;
+use crate::config::{Config, PageDef};
+use crate::lua::{BuildTracker, CachedDeps, SharedTracker};
+use crate::markdown::{Pipeline, TransformContext};
 use crate::templates::Templates;
-use crate::text::{format_home_text, format_post_text};
-use crate::watch::ChangeSet;
+
+/// Cache file name
+const CACHE_FILE: &str = ".rs-web-cache/deps.bin";
 
 /// Main build orchestrator
 pub struct Builder {
     config: Config,
     output_dir: PathBuf,
     project_dir: PathBuf,
+    /// Build dependency tracker
+    tracker: SharedTracker,
+    /// Cached dependency info from previous build
+    cached_deps: Option<CachedDeps>,
+    /// Cached global data from last build
+    cached_global_data: Option<serde_json::Value>,
+    /// Cached page definitions from last build
+    cached_pages: Option<Vec<PageDef>>,
 }
 
 impl Builder {
     pub fn new(config: Config, output_dir: PathBuf, project_dir: PathBuf) -> Self {
+        // Load cached deps from previous build
+        let cache_path = project_dir.join(CACHE_FILE);
+        let cached_deps = CachedDeps::load(&cache_path);
+        if cached_deps.is_some() {
+            debug!("Loaded cached dependency info from {:?}", cache_path);
+        }
+
+        // Get the tracker from config (it was created during config loading)
+        let tracker = config.tracker().clone();
+
         Self {
             config,
             output_dir,
             project_dir,
+            tracker,
+            cached_deps,
+            cached_global_data: None,
+            cached_pages: None,
         }
+    }
+
+    /// Create a new builder with a fresh tracker (for full rebuilds)
+    pub fn new_with_tracker(project_dir: PathBuf, output_dir: PathBuf) -> Result<Self> {
+        let tracker = Arc::new(BuildTracker::new());
+        let config = Config::load_with_tracker(&project_dir, tracker.clone())?;
+
+        // Load cached deps from previous build
+        let cache_path = project_dir.join(CACHE_FILE);
+        let cached_deps = CachedDeps::load(&cache_path);
+        if cached_deps.is_some() {
+            debug!("Loaded cached dependency info from {:?}", cache_path);
+        }
+
+        Ok(Self {
+            config,
+            output_dir,
+            project_dir,
+            tracker,
+            cached_deps,
+            cached_global_data: None,
+            cached_pages: None,
+        })
     }
 
     /// Resolve a path relative to the project directory
@@ -52,71 +90,101 @@ impl Builder {
         debug!("Output directory: {:?}", self.output_dir);
         debug!("Project directory: {:?}", self.project_dir);
 
-        // Run before_build hook
-        trace!("Running before_build hook");
-        self.config.call_before_build()?;
-
         // Stage 1: Clean output directory
         trace!("Stage 1: Cleaning output directory");
         self.clean()?;
 
-        // Stage 2: Discover and load content
-        trace!("Stage 2: Discovering content");
-        let mut content = self.load_content()?;
-        debug!(
-            "Found {} sections with {} total posts",
-            content.sections.len(),
-            content
-                .sections
-                .values()
-                .map(|s| s.posts.len())
-                .sum::<usize>()
-        );
+        // Run before_build hook (after clean, so it can write to output_dir)
+        trace!("Running before_build hook");
+        self.config.call_before_build()?;
 
-        // Stage 2.5: Apply custom filter and sort functions
-        self.apply_custom_filtering(&mut content)?;
-        self.apply_custom_sorting(&mut content)?;
+        // Stage 2: Call data() to get global data
+        trace!("Stage 2: Calling data() function");
+        let global_data = self.config.call_data()?;
+        debug!("Global data loaded");
 
-        // Stage 3: Process assets
-        trace!("Stage 3: Processing assets");
+        // Stage 3: Call pages(global) to get page definitions
+        trace!("Stage 3: Calling pages() function");
+        let pages = self.config.call_pages(&global_data)?;
+        debug!("Found {} pages to generate", pages.len());
+
+        // Cache for incremental builds
+        self.cached_global_data = Some(global_data.clone());
+        self.cached_pages = Some(pages.clone());
+
+        // Stage 4: Process assets
+        trace!("Stage 4: Processing assets");
         self.process_assets()?;
 
-        // Stage 4: Load templates (needed for HTML content processing)
-        trace!("Stage 4: Loading templates");
+        // Stage 5: Load templates
+        trace!("Stage 5: Loading templates");
         let templates = Templates::new(&self.resolve_path(&self.config.paths.templates))?;
 
-        // Stage 5: Process content through pipeline (markdown) or Tera (HTML)
-        trace!("Stage 5: Processing content through pipeline");
+        // Stage 6: Render all pages in parallel
+        trace!("Stage 6: Rendering {} pages", pages.len());
         let pipeline = Pipeline::from_config(&self.config);
-        let content = self.process_content(content, &pipeline, &templates)?;
+        self.render_pages(&pages, &global_data, &templates, &pipeline)?;
 
-        // Stage 6: Render and write HTML
-        trace!("Stage 6: Rendering HTML");
-        self.render_html(&content, &templates)?;
-
-        // Stage 7: Render text output (if enabled)
-        if self.config.text.enabled {
-            trace!("Stage 7: Rendering text output");
-            self.render_text(&content)?;
-        }
-
-        let total_posts: usize = content.sections.values().map(|s| s.posts.len()).sum();
-        info!(
-            "Build complete: {} posts in {} sections",
-            total_posts,
-            content.sections.len()
-        );
-        println!(
-            "Generated {} posts in {} sections",
-            total_posts,
-            content.sections.len()
-        );
+        info!("Build complete: {} pages generated", pages.len());
+        println!("Generated {} pages", pages.len());
 
         // Run after_build hook
         trace!("Running after_build hook");
         self.config.call_after_build()?;
 
+        // Merge all thread-local tracking data and save
+        self.tracker.merge_all_threads();
+        self.save_cached_deps()?;
+
         Ok(())
+    }
+
+    /// Save tracked dependencies to cache file
+    fn save_cached_deps(&self) -> Result<()> {
+        let cache_path = self.project_dir.join(CACHE_FILE);
+        let deps = CachedDeps::from_tracker(&self.tracker);
+        deps.save(&cache_path)
+            .with_context(|| format!("Failed to save dependency cache to {:?}", cache_path))?;
+        debug!(
+            "Saved dependency cache: {} reads, {} writes",
+            deps.reads.len(),
+            deps.writes.len()
+        );
+        Ok(())
+    }
+
+    /// Get files that have changed since last build
+    pub fn get_changed_files(&self) -> Vec<PathBuf> {
+        match &self.cached_deps {
+            Some(cached) => self.tracker.get_changed_files(cached),
+            None => Vec::new(), // No cache means full rebuild needed
+        }
+    }
+
+    /// Check if a full rebuild is needed (no cache or config changed)
+    pub fn needs_full_rebuild(&self) -> bool {
+        self.cached_deps.is_none()
+    }
+
+    /// Check if a file was tracked as a dependency in the last build
+    pub fn is_tracked_file(&self, path: &Path) -> bool {
+        if let Some(ref cached) = self.cached_deps {
+            // Canonicalize path for comparison
+            let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            cached.reads.contains_key(&path)
+        } else {
+            // No cache, assume all files are relevant
+            true
+        }
+    }
+
+    /// Check if any tracked files have changed since last build
+    pub fn has_tracked_changes(&self) -> bool {
+        if let Some(ref cached) = self.cached_deps {
+            !self.tracker.get_changed_files(cached).is_empty()
+        } else {
+            true // No cache means we need to build
+        }
     }
 
     fn clean(&self) -> Result<()> {
@@ -132,91 +200,11 @@ impl Builder {
         Ok(())
     }
 
-    fn load_content(&self) -> Result<Content> {
-        discover_content(
-            &self.config.paths,
-            &self.config.sections,
-            Some(&self.project_dir),
-        )
-    }
-
-    fn apply_custom_filtering(&self, content: &mut Content) -> Result<()> {
-        for (section_name, section) in content.sections.iter_mut() {
-            // Check if this section has a custom filter function
-            if self.config.has_filter_fn(section_name) {
-                debug!("Applying custom filter to section '{}'", section_name);
-                let original_count = section.posts.len();
-
-                // Filter using the Lua function
-                section.posts.retain(|post| {
-                    let post_json = serde_json::to_value(post).unwrap_or_default();
-                    self.config
-                        .call_filter_fn(section_name, &post_json)
-                        .unwrap_or(true) // Keep post on error
-                });
-
-                let filtered_count = original_count - section.posts.len();
-                if filtered_count > 0 {
-                    debug!(
-                        "Filtered out {} posts from section '{}'",
-                        filtered_count, section_name
-                    );
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn apply_custom_sorting(&self, content: &mut Content) -> Result<()> {
-        for (section_name, section) in content.sections.iter_mut() {
-            // Check if this section has a custom sort function
-            if self.config.has_sort_fn(section_name) {
-                debug!("Applying custom sort to section '{}'", section_name);
-
-                // Sort using the Lua function
-                section.posts.sort_by(|a, b| {
-                    // Convert posts to JSON for Lua
-                    let a_json = serde_json::to_value(a).unwrap_or_default();
-                    let b_json = serde_json::to_value(b).unwrap_or_default();
-
-                    // Call the Lua sort function
-                    self.config
-                        .call_sort_fn(section_name, &a_json, &b_json)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-            }
-        }
-        Ok(())
-    }
-
     fn process_assets(&self) -> Result<()> {
         let static_dir = self.output_dir.join("static");
         let paths = &self.config.paths;
 
-        // Build CSS
-        debug!("Building CSS from {:?}", self.resolve_path(&paths.styles));
-        build_css(
-            &self.resolve_path(&paths.styles),
-            &static_dir.join(&self.config.build.css_output),
-            self.config.build.minify_css,
-        )?;
-
-        // Optimize images
-        debug!(
-            "Optimizing images (quality: {}, scale: {})",
-            self.config.images.quality, self.config.images.scale_factor
-        );
-        let image_config = ImageConfig {
-            quality: self.config.images.quality,
-            scale_factor: self.config.images.scale_factor,
-        };
-        optimize_images(
-            &self.resolve_path(&paths.static_files),
-            &static_dir,
-            &image_config,
-        )?;
-
-        // Copy other static files
+        // Copy static files (CSS and images are handled explicitly via Lua hooks)
         debug!(
             "Copying static files from {:?}",
             self.resolve_path(&paths.static_files)
@@ -226,526 +214,129 @@ impl Builder {
         Ok(())
     }
 
-    fn process_content(
+    fn render_pages(
         &self,
-        mut content: Content,
-        pipeline: &Pipeline,
+        pages: &[PageDef],
+        global_data: &serde_json::Value,
         templates: &Templates,
-    ) -> Result<Content> {
-        let paths = &self.config.paths;
+        pipeline: &Pipeline,
+    ) -> Result<()> {
+        // Render all pages in parallel
+        pages
+            .par_iter()
+            .try_for_each(|page| self.render_single_page(page, global_data, templates, pipeline))?;
 
-        // Process home page
-        if let Some(page) = content.home.take() {
-            let home_path = self.resolve_path(&paths.content).join(&paths.home);
+        Ok(())
+    }
+
+    fn render_single_page(
+        &self,
+        page: &PageDef,
+        global_data: &serde_json::Value,
+        templates: &Templates,
+        pipeline: &Pipeline,
+    ) -> Result<()> {
+        trace!("Rendering page: {}", page.path);
+
+        // Process content through markdown pipeline if provided
+        let html_content = if let Some(ref markdown) = page.content {
             let ctx = TransformContext {
                 config: &self.config,
-                current_path: &home_path,
+                current_path: &self.project_dir,
                 base_url: &self.config.site.base_url,
             };
-            let html = pipeline.process(&page.content, &ctx);
-            content.home = Some(page.with_html(html));
-        }
-
-        // Process root pages
-        let content_dir = self.resolve_path(&paths.content);
-        content.root_pages = content
-            .root_pages
-            .into_iter()
-            .map(|page| {
-                let file_name = page
-                    .file_slug
-                    .as_ref()
-                    .map(|s| format!("{}.md", s))
-                    .unwrap_or_else(|| "page.md".to_string());
-                let page_path = content_dir.join(&file_name);
-                let ctx = TransformContext {
-                    config: &self.config,
-                    current_path: &page_path,
-                    base_url: &self.config.site.base_url,
-                };
-                let html = pipeline.process(&page.content, &ctx);
-                page.with_html(html)
-            })
-            .collect();
-
-        // Process all posts
-        content
-            .sections
-            .par_iter_mut()
-            .try_for_each(|(_, section)| {
-                let section_name = &section.name;
-                section.posts.par_iter_mut().try_for_each(|post| {
-                    self.process_single_post(post, section_name, pipeline, paths, templates)
-                })
-            })?;
-
-        Ok(content)
-    }
-
-    /// Process a single post through the markdown pipeline (or Tera for HTML) and encryption
-    fn process_single_post(
-        &self,
-        post: &mut crate::content::Post,
-        section_name: &str,
-        pipeline: &Pipeline,
-        paths: &crate::config::PathsConfig,
-        templates: &Templates,
-    ) -> Result<()> {
-        trace!(
-            "Processing post: {} ({})",
-            post.frontmatter.title, section_name
-        );
-
-        // Handle HTML content files - process through Tera
-        if post.content_type == ContentType::Html {
-            trace!("Post is HTML content, processing through Tera");
-            return self.process_html_post(post, templates);
-        }
-
-        // Markdown processing
-        let path = self
-            .resolve_path(&paths.content)
-            .join(section_name)
-            .join(format!("{}.md", post.file_slug));
-        let ctx = TransformContext {
-            config: &self.config,
-            current_path: &path,
-            base_url: &self.config.site.base_url,
+            Some(pipeline.process(markdown, &ctx))
+        } else {
+            page.html.clone()
         };
 
-        // Check if post should be fully encrypted
-        if post.frontmatter.encrypted {
-            debug!("Encrypting post: {}", post.frontmatter.title);
-            let html = pipeline.process(&post.content, &ctx);
-            let password = resolve_password(
-                &self.config.encryption,
-                post.frontmatter.password.as_deref(),
-            )
-            .with_context(|| {
-                format!(
-                    "Failed to resolve password for encrypted post: {}",
-                    post.frontmatter.title
-                )
-            })?;
-
-            let encrypted = encrypt_content(&html, &password)
-                .with_context(|| format!("Failed to encrypt post: {}", post.frontmatter.title))?;
-
-            post.encrypted_content = Some(encrypted);
-            post.html = String::new();
+        // If no template, output html directly (for raw text/xml files)
+        let html = if page.template.is_none() {
+            html_content.unwrap_or_default()
         } else {
-            // Check for partial encryption (:::encrypted blocks)
-            let preprocess_result = extract_encrypted_blocks(&post.content);
-
-            if preprocess_result.blocks.is_empty() {
-                // No encrypted blocks, process normally
-                post.html = pipeline.process(&post.content, &ctx);
-            } else {
-                debug!(
-                    "Found {} encrypted blocks in post: {}",
-                    preprocess_result.blocks.len(),
-                    post.frontmatter.title
-                );
-                // Process main content with placeholders
-                let main_html = pipeline.process(&preprocess_result.markdown, &ctx);
-
-                // Process and encrypt each block
-                let encrypted_blocks: Result<Vec<_>> = preprocess_result
-                    .blocks
-                    .par_iter()
-                    .map(|block| {
-                        // Use block-specific password if provided, otherwise fall back to global
-                        let block_password = if let Some(ref pw) = block.password {
-                            pw.clone()
-                        } else {
-                            resolve_password(
-                                &self.config.encryption,
-                                post.frontmatter.password.as_deref(),
-                            )
-                            .with_context(|| {
-                                format!(
-                                    "Failed to resolve password for block {} in post: {}",
-                                    block.id, post.frontmatter.title
-                                )
-                            })?
-                        };
-
-                        // Render block content through pipeline
-                        let block_html = pipeline.process(&block.content, &ctx);
-
-                        // Encrypt the rendered HTML
-                        let encrypted = encrypt_content(&block_html, &block_password)
-                            .with_context(|| {
-                                format!(
-                                    "Failed to encrypt block {} in post: {}",
-                                    block.id, post.frontmatter.title
-                                )
-                            })?;
-
-                        Ok((
-                            block.id,
-                            encrypted.ciphertext,
-                            encrypted.salt,
-                            encrypted.nonce,
-                            block.password.is_some(),
-                        ))
-                    })
-                    .collect();
-
-                // Replace placeholders with encrypted HTML
-                post.html = replace_placeholders(&main_html, &encrypted_blocks?, post.slug());
-                post.has_encrypted_blocks = true;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Process an HTML content file through Tera templating with encryption support
-    fn process_html_post(&self, post: &mut Post, templates: &Templates) -> Result<()> {
-        // Render content through Tera first
-        let rendered_html = templates.render_html_content(&self.config, post)?;
-
-        // Check if post should be fully encrypted
-        if post.frontmatter.encrypted {
-            let password = resolve_password(
-                &self.config.encryption,
-                post.frontmatter.password.as_deref(),
-            )
-            .with_context(|| {
-                format!(
-                    "Failed to resolve password for encrypted HTML post: {}",
-                    post.frontmatter.title
-                )
-            })?;
-
-            let encrypted = encrypt_content(&rendered_html, &password).with_context(|| {
-                format!("Failed to encrypt HTML post: {}", post.frontmatter.title)
-            })?;
-
-            post.encrypted_content = Some(encrypted);
-            post.html = String::new();
-        } else {
-            // Check for partial encryption (<encrypted> blocks)
-            let preprocess_result = extract_html_encrypted_blocks(&rendered_html);
-
-            if preprocess_result.blocks.is_empty() {
-                // No encrypted blocks, use rendered HTML as-is
-                post.html = rendered_html;
-            } else {
-                debug!(
-                    "Found {} encrypted blocks in HTML post: {}",
-                    preprocess_result.blocks.len(),
-                    post.frontmatter.title
-                );
-                // Process and encrypt each block
-                let encrypted_blocks: Result<Vec<_>> = preprocess_result
-                    .blocks
-                    .iter()
-                    .map(|block| {
-                        // Use block-specific password if provided, otherwise fall back to global
-                        let block_password = if let Some(ref pw) = block.password {
-                            pw.clone()
-                        } else {
-                            resolve_password(
-                                &self.config.encryption,
-                                post.frontmatter.password.as_deref(),
-                            )
-                            .with_context(|| {
-                                format!(
-                                    "Failed to resolve password for block {} in HTML post: {}",
-                                    block.id, post.frontmatter.title
-                                )
-                            })?
-                        };
-
-                        // Encrypt the block content (already rendered through Tera)
-                        let encrypted = encrypt_content(&block.content, &block_password)
-                            .with_context(|| {
-                                format!(
-                                    "Failed to encrypt block {} in HTML post: {}",
-                                    block.id, post.frontmatter.title
-                                )
-                            })?;
-
-                        Ok((
-                            block.id,
-                            encrypted.ciphertext,
-                            encrypted.salt,
-                            encrypted.nonce,
-                            block.password.is_some(),
-                        ))
-                    })
-                    .collect();
-
-                // Replace placeholders with encrypted HTML
-                post.html = replace_placeholders(
-                    &preprocess_result.markdown,
-                    &encrypted_blocks?,
-                    post.slug(),
-                );
-                post.has_encrypted_blocks = true;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn render_html(&self, content: &Content, templates: &Templates) -> Result<()> {
-        // Build link graph for backlinks
-        debug!("Building link graph for backlinks");
-        let link_graph = LinkGraph::build(&self.config, content);
-        trace!("Link graph built");
-
-        // Compute data from Lua config (for templates like tags.html)
-        let computed = self.compute_data(content);
-        let computed_ref = if computed.as_object().map(|o| o.is_empty()).unwrap_or(true) {
-            None
-        } else {
-            debug!("Computed data available for templates");
-            Some(&computed)
+            templates.render_page(&self.config, page, global_data, html_content.as_deref())?
         };
 
-        // Generate graph if enabled
-        if self.config.graph.enabled {
-            debug!("Generating graph visualization");
-            let graph_data = link_graph.to_graph_data();
+        // Write output file
+        let relative_path = page.path.trim_matches('/');
 
-            // Write graph.json for visualization
-            let graph_json = serde_json::to_string(&graph_data)?;
-            fs::write(self.output_dir.join("graph.json"), graph_json)?;
+        // Check if path has a file extension (e.g., feed.xml, sitemap.json)
+        let has_extension = relative_path.contains('.')
+            && !relative_path.ends_with('/')
+            && relative_path
+                .rsplit('/')
+                .next()
+                .map(|s| s.contains('.'))
+                .unwrap_or(false);
 
-            // Render graph page
-            let graph_dir = self.output_dir.join(&self.config.graph.path);
-            fs::create_dir_all(&graph_dir)?;
-            let graph_html = templates.render_graph(&self.config, &graph_data)?;
-            fs::write(graph_dir.join("index.html"), graph_html)?;
-        }
-
-        // Render home page
-        if let Some(home_page) = &content.home {
-            let html = templates.render_home(&self.config, home_page, content, computed_ref)?;
-            fs::write(self.output_dir.join("index.html"), html)?;
-        }
-
-        // Render root pages (404.md -> 404.html, etc.)
-        for page in &content.root_pages {
-            if let Some(slug) = &page.file_slug {
-                let html = templates.render_root_page(&self.config, page, content, computed_ref)?;
-                fs::write(self.output_dir.join(format!("{}.html", slug)), html)?;
+        if has_extension {
+            // Write directly to file path (e.g., /feed.xml -> dist/feed.xml)
+            let file_path = self.output_dir.join(relative_path);
+            if let Some(parent) = file_path.parent() {
+                fs::create_dir_all(parent)?;
             }
+            fs::write(file_path, html)?;
+        } else {
+            // Write to directory with index.html (e.g., /about/ -> dist/about/index.html)
+            let page_dir = if relative_path.is_empty() {
+                self.output_dir.clone()
+            } else {
+                self.output_dir.join(relative_path)
+            };
+            fs::create_dir_all(&page_dir)?;
+            fs::write(page_dir.join("index.html"), html)?;
         }
-
-        // Render computed pages (e.g., /tags/array/, /tags/binary-search/)
-        let computed_pages = self.generate_computed_pages(content);
-        if !computed_pages.is_empty() {
-            debug!("Generating {} computed pages", computed_pages.len());
-            for page in &computed_pages {
-                let relative_path = page.path.trim_matches('/');
-                let page_dir = self.output_dir.join(relative_path);
-                fs::create_dir_all(&page_dir)?;
-                let html = templates.render_computed_page(&self.config, page, computed_ref)?;
-                fs::write(page_dir.join("index.html"), html)?;
-            }
-        }
-
-        // Render posts for each section
-        content.sections.par_iter().try_for_each(|(_, section)| {
-            section.posts.par_iter().try_for_each(|post| {
-                // Use resolved URL to determine output path
-                let url = post.url(&self.config);
-                // Convert URL to file path: /blog/2024/01/hello/ -> blog/2024/01/hello
-                let relative_path = url.trim_matches('/');
-                let post_dir = self.output_dir.join(relative_path);
-                fs::create_dir_all(&post_dir)?;
-                let html = templates.render_post(&self.config, post, &link_graph)?;
-                fs::write(post_dir.join("index.html"), html)?;
-                Ok::<_, anyhow::Error>(())
-            })
-        })?;
-
-        // Generate RSS feed
-        if self.config.rss.enabled {
-            debug!("Generating RSS feed");
-            self.generate_rss(content)?;
-        }
-
-        Ok(())
-    }
-
-    fn generate_rss(&self, content: &Content) -> Result<()> {
-        trace!("Building RSS feed");
-        let rss_config = &self.config.rss;
-
-        // Collect posts from specified sections (or all if empty)
-        let mut posts: Vec<&Post> = content
-            .sections
-            .iter()
-            .filter(|(name, _)| {
-                rss_config.sections.is_empty() || rss_config.sections.contains(name)
-            })
-            .flat_map(|(_, section)| section.posts.iter())
-            .filter(|post| !post.frontmatter.encrypted) // Exclude fully encrypted posts
-            .filter(|post| {
-                // Optionally exclude posts with encrypted blocks
-                !rss_config.exclude_encrypted_blocks || !post.has_encrypted_blocks
-            })
-            .collect();
-
-        // Sort by date (newest first)
-        posts.sort_by(|a, b| b.frontmatter.date.cmp(&a.frontmatter.date));
-
-        // Limit number of items
-        posts.truncate(rss_config.limit);
-
-        let rss_xml = generate_rss(&self.config, &posts);
-        fs::write(self.output_dir.join(&rss_config.filename), rss_xml)?;
-
-        Ok(())
-    }
-
-    /// Generate plain text versions of posts for curl-friendly access
-    fn render_text(&self, content: &Content) -> Result<()> {
-        let text_config = &self.config.text;
-        let base_url = &self.config.site.base_url;
-
-        // Render home page text if enabled
-        if text_config.include_home
-            && let Some(home_page) = &content.home
-        {
-            let text = format_home_text(
-                &self.config.site.title,
-                &self.config.site.description,
-                &home_page.html,
-                base_url,
-            );
-            fs::write(self.output_dir.join("index.txt"), text)?;
-        }
-
-        // Render posts for each section in parallel
-        content
-            .sections
-            .par_iter()
-            .try_for_each(|(section_name, section)| {
-                // Check if this section should be included
-                if !text_config.sections.is_empty() && !text_config.sections.contains(section_name)
-                {
-                    return Ok::<_, anyhow::Error>(());
-                }
-
-                section.posts.par_iter().try_for_each(|post| {
-                    // Skip encrypted posts if configured
-                    if text_config.exclude_encrypted
-                        && (post.frontmatter.encrypted || post.has_encrypted_blocks)
-                    {
-                        return Ok::<_, anyhow::Error>(());
-                    }
-
-                    let url = post.url(&self.config);
-                    let relative_path = url.trim_matches('/');
-                    let post_dir = self.output_dir.join(relative_path);
-
-                    // Format date for display
-                    let date_str = post
-                        .frontmatter
-                        .date
-                        .map(|d| d.format("%Y-%m-%d").to_string());
-
-                    let tags = post.frontmatter.tags.as_deref().unwrap_or(&[]);
-
-                    // For fully encrypted posts, use placeholder content
-                    let content = if post.frontmatter.encrypted {
-                        "[This post is encrypted - visit web version to decrypt]"
-                    } else {
-                        &post.html
-                    };
-
-                    let text = format_post_text(
-                        &post.frontmatter.title,
-                        date_str.as_deref(),
-                        post.frontmatter.description.as_deref(),
-                        tags,
-                        post.reading_time,
-                        content,
-                        &url,
-                        base_url,
-                    );
-
-                    fs::write(post_dir.join("index.txt"), text)?;
-                    Ok::<_, anyhow::Error>(())
-                })
-            })?;
-
-        // Count text files generated
-        let text_count: usize = content
-            .sections
-            .iter()
-            .filter(|(name, _)| {
-                text_config.sections.is_empty() || text_config.sections.contains(name)
-            })
-            .flat_map(|(_, section)| section.posts.iter())
-            .filter(|post| {
-                !text_config.exclude_encrypted
-                    || (!post.frontmatter.encrypted && !post.has_encrypted_blocks)
-            })
-            .count();
-
-        println!("Generated {} text files", text_count);
 
         Ok(())
     }
 
     /// Perform an incremental build based on what changed
-    pub fn incremental_build(&mut self, changes: &ChangeSet) -> Result<()> {
+    /// Uses tracker data to filter changes to only files that were actually used
+    pub fn incremental_build(&mut self, changes: &crate::watch::ChangeSet) -> Result<()> {
         debug!("Starting incremental build");
         trace!("Change set: {:?}", changes);
 
-        // If full rebuild is needed, just do a regular build
+        // Config changed - full rebuild needed (Lua functions may have changed)
         if changes.full_rebuild {
-            info!("Full rebuild required");
             return self.build();
         }
 
-        // Handle CSS-only changes (fastest path)
-        if changes.rebuild_css
-            && !changes.reload_templates
-            && !changes.rebuild_home
-            && changes.content_files.is_empty()
-        {
-            self.rebuild_css_only()?;
+        // Filter content changes to only files that were tracked as dependencies
+        let relevant_changes: Vec<PathBuf> = changes
+            .content_files
+            .iter()
+            .filter(|p| {
+                let full_path = self.project_dir.join(p);
+                let is_tracked = self.is_tracked_file(&full_path);
+                if !is_tracked {
+                    trace!("Skipping untracked file: {:?}", p);
+                }
+                is_tracked
+            })
+            .map(|p| self.project_dir.join(p))
+            .collect();
 
-            // Also handle any static/image changes
-            self.process_static_changes(changes)?;
-            return Ok(());
+        // Content files changed - try incremental update
+        if !relevant_changes.is_empty() {
+            debug!(
+                "{} tracked content files changed (out of {} total)",
+                relevant_changes.len(),
+                changes.content_files.len()
+            );
+            return self.rebuild_content_only(&relevant_changes);
+        } else if !changes.content_files.is_empty() {
+            debug!(
+                "All {} changed files were untracked, skipping rebuild",
+                changes.content_files.len()
+            );
         }
 
-        // Handle static file changes without content rebuild
-        if !changes.reload_templates
-            && !changes.rebuild_home
-            && changes.content_files.is_empty()
-            && !changes.rebuild_css
-        {
-            self.process_static_changes(changes)?;
-            return Ok(());
+        // Template-only changes - re-render with cached data (skip Lua calls)
+        if changes.reload_templates {
+            return self.rebuild_templates_only();
         }
 
-        // For template or content changes, we need to rebuild content
-        let content = self.load_content()?;
-        let templates = Templates::new(&self.resolve_path(&self.config.paths.templates))?;
-        let pipeline = Pipeline::from_config(&self.config);
-
-        // Process all content (could be optimized further for single-file changes)
-        let content = self.process_content(content, &pipeline, &templates)?;
-
-        // Render HTML
-        self.render_html(&content, &templates)?;
-
-        // Render text if enabled
-        if self.config.text.enabled {
-            self.render_text(&content)?;
-        }
-
-        // Handle any CSS changes
+        // Handle CSS-only changes
         if changes.rebuild_css {
             self.rebuild_css_only()?;
         }
@@ -753,39 +344,85 @@ impl Builder {
         // Handle static/image changes
         self.process_static_changes(changes)?;
 
-        let total_posts: usize = content.sections.values().map(|s| s.posts.len()).sum();
-        println!(
-            "Rebuilt {} posts in {} sections",
-            total_posts,
-            content.sections.len()
+        Ok(())
+    }
+
+    /// Rebuild content - use incremental update if available, otherwise full data reload
+    fn rebuild_content_only(&mut self, changed_paths: &[PathBuf]) -> Result<()> {
+        debug!(
+            "Content-only rebuild for {} changed files",
+            changed_paths.len()
         );
 
+        // Try incremental update if update_data function exists and we have cached data
+        let global_data = if self.config.has_update_data() && self.cached_global_data.is_some() {
+            debug!("Using incremental update_data()");
+            let cached = self.cached_global_data.as_ref().unwrap();
+            self.config.call_update_data(cached, changed_paths)?
+        } else {
+            debug!("Using full data() reload");
+            self.config.call_data()?
+        };
+
+        let pages = self.config.call_pages(&global_data)?;
+
+        // Update cache
+        self.cached_global_data = Some(global_data.clone());
+        self.cached_pages = Some(pages.clone());
+
+        // Reload templates and re-render
+        let templates = Templates::new(&self.resolve_path(&self.config.paths.templates))?;
+        let pipeline = Pipeline::from_config(&self.config);
+        self.render_pages(&pages, &global_data, &templates, &pipeline)?;
+
+        // Merge thread-local tracking data and save
+        self.tracker.merge_all_threads();
+        self.save_cached_deps()?;
+
+        println!("Re-rendered {} pages (content changed)", pages.len());
         Ok(())
     }
 
-    /// Rebuild only CSS
+    /// Rebuild only by re-rendering templates with cached data
+    fn rebuild_templates_only(&self) -> Result<()> {
+        let (global_data, pages) = match (&self.cached_global_data, &self.cached_pages) {
+            (Some(data), Some(pages)) => (data, pages),
+            _ => {
+                // No cache available, need full rebuild
+                return Err(anyhow::anyhow!(
+                    "No cached data available for template rebuild"
+                ));
+            }
+        };
+
+        debug!("Template-only rebuild with {} cached pages", pages.len());
+
+        // Reload templates
+        let templates = Templates::new(&self.resolve_path(&self.config.paths.templates))?;
+        let pipeline = Pipeline::from_config(&self.config);
+
+        // Re-render all pages with cached data
+        self.render_pages(pages, global_data, &templates, &pipeline)?;
+
+        println!("Re-rendered {} pages (templates only)", pages.len());
+        Ok(())
+    }
+
+    /// Rebuild CSS by calling before_build hook (CSS is now handled via Lua)
     fn rebuild_css_only(&self) -> Result<()> {
-        let static_dir = self.output_dir.join("static");
-        build_css(
-            &self.resolve_path(&self.config.paths.styles),
-            &static_dir.join(&self.config.build.css_output),
-            self.config.build.minify_css,
-        )?;
-        println!("Rebuilt CSS");
+        self.config.call_before_build()?;
+        println!("Rebuilt assets (via before_build hook)");
         Ok(())
     }
 
-    /// Process static file and image changes
-    fn process_static_changes(&self, changes: &ChangeSet) -> Result<()> {
+    /// Process static file and image changes (just copies, optimization handled via Lua hooks)
+    fn process_static_changes(&self, changes: &crate::watch::ChangeSet) -> Result<()> {
+        use crate::assets::copy_single_static_file;
+
         let static_dir = self.output_dir.join("static");
         let source_static = self.resolve_path(&self.config.paths.static_files);
 
-        let image_config = ImageConfig {
-            quality: self.config.images.quality,
-            scale_factor: self.config.images.scale_factor,
-        };
-
-        // Process changed images
+        // Process changed images (just copy, optimization handled via Lua hooks)
         for rel_path in &changes.image_files {
             let src = source_static.join(rel_path.as_path());
             let dest = static_dir.join(rel_path.as_path());
@@ -794,8 +431,8 @@ impl Builder {
                 if let Some(parent) = dest.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                optimize_single_image(&src, &dest, &image_config)?;
-                println!("Optimized image: {}", rel_path.display());
+                copy_single_static_file(&src, &dest)?;
+                println!("Copied image: {}", rel_path.display());
             }
         }
 
@@ -820,63 +457,11 @@ impl Builder {
     pub fn reload_config(&mut self) -> Result<()> {
         debug!("Reloading config from {:?}", self.project_dir);
         self.config = crate::config::Config::load(&self.project_dir)?;
+        // Clear cache since Lua functions might produce different output
+        self.cached_global_data = None;
+        self.cached_pages = None;
         info!("Config reloaded successfully");
         Ok(())
-    }
-
-    /// Generate computed pages from Lua config
-    fn generate_computed_pages(&self, content: &Content) -> Vec<ComputedPage> {
-        if !self.config.has_computed_pages() {
-            return Vec::new();
-        }
-
-        // Serialize sections to JSON for Lua
-        let sections_json = match serde_json::to_string(&content.sections) {
-            Ok(json) => json,
-            Err(e) => {
-                log::warn!("Failed to serialize sections for computed_pages: {}", e);
-                return Vec::new();
-            }
-        };
-
-        match self.config.call_computed_pages(&sections_json) {
-            Ok(pages) => pages,
-            Err(e) => {
-                log::warn!("Failed to generate computed pages: {}", e);
-                Vec::new()
-            }
-        }
-    }
-
-    /// Compute computed data from Lua config
-    fn compute_data(&self, content: &Content) -> serde_json::Value {
-        let computed_names = self.config.computed_names();
-        if computed_names.is_empty() {
-            return serde_json::Value::Object(serde_json::Map::new());
-        }
-
-        // Serialize sections to JSON for Lua
-        let sections_json = match serde_json::to_string(&content.sections) {
-            Ok(json) => json,
-            Err(e) => {
-                log::warn!("Failed to serialize sections for computed: {}", e);
-                return serde_json::Value::Object(serde_json::Map::new());
-            }
-        };
-
-        let mut computed = serde_json::Map::new();
-        for name in computed_names {
-            match self.config.call_computed(name, &sections_json) {
-                Ok(value) => {
-                    computed.insert(name.to_string(), value);
-                }
-                Err(e) => {
-                    log::warn!("Failed to compute '{}': {}", name, e);
-                }
-            }
-        }
-
-        serde_json::Value::Object(computed)
     }
 
     /// Get a reference to the current config
