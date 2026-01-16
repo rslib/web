@@ -151,6 +151,27 @@
 //! - `env(name)` - Get environment variable
 //! - `print(...)` - Log output to build log
 //!
+//! **Async I/O (rs.async):**
+//! - `fetch(url, options?)` - HTTP fetch (blocking)
+//! - `fetch_json(url, options?)` - Fetch and parse JSON
+//! - `fetch_all(requests)` - Fetch multiple URLs concurrently
+//! - `spawn(url, options?)` - Spawn async fetch task
+//! - `await(task)` - Await spawned task
+//! - `await_all(tasks)` - Await multiple tasks
+//! - `read(path)` - Read file as binary
+//! - `read_file(path)` - Read file as text
+//! - `read_files(paths)` - Read multiple files concurrently
+//! - `write_file(path, content)` - Write file
+//! - `copy_file(src, dst)` - Copy file
+//! - `rename(src, dst)` - Rename/move file or directory
+//! - `remove_file(path)` - Remove file
+//! - `remove_dir(path)` - Remove directory recursively
+//! - `create_dir(path)` - Create directory (including parents)
+//! - `exists(path)` - Check if path exists
+//! - `metadata(path)` - Get file metadata
+//! - `read_dir(path)` - List directory contents
+//! - `canonicalize(path)` - Get canonical/absolute path
+//!
 //! All file operations respect the sandbox setting and are tracked for incremental builds.
 //!
 //! ## Root Pages

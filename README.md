@@ -282,6 +282,42 @@ local evens = parallel.filter(items, function(x) return x % 2 == 0 end)
 local sum = parallel.reduce(items, 0, function(acc, x) return acc + x end)
 ```
 
+#### Async I/O (Tokio)
+
+True async I/O operations backed by Tokio runtime:
+
+```lua
+-- HTTP requests
+local response = rs.async.fetch("https://api.example.com/data")
+local json = rs.async.fetch_json("https://api.example.com/users")
+
+-- Spawn multiple requests in parallel
+local t1 = rs.async.spawn("https://api.example.com/a")
+local t2 = rs.async.spawn("https://api.example.com/b")
+local results = rs.async.await_all({t1, t2})
+
+-- File operations
+local content = rs.async.read_file("path/to/file.txt")  -- text
+local bytes = rs.async.read("path/to/image.png")        -- binary
+rs.async.write_file("output.txt", content)
+rs.async.copy_file("src.txt", "dst.txt")
+rs.async.rename("old.txt", "new.txt")
+
+-- Directory operations
+local entries = rs.async.read_dir("content/")
+for _, entry in ipairs(entries) do
+  print(entry.name, entry.is_file, entry.is_dir)
+end
+rs.async.create_dir("new/nested/dir")
+rs.async.remove_dir("old/dir")
+
+-- Path and metadata
+local abs_path = rs.async.canonicalize("./relative/path")
+local exists = rs.async.exists("file.txt")
+local meta = rs.async.metadata("file.txt")
+print(meta.len, meta.is_file, meta.modified)
+```
+
 ### Configuration Sections
 
 | Section | Key Settings |

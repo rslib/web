@@ -418,6 +418,37 @@ pub static LUA_CLASSES: &[LuaClass] = &[
         ],
     },
     LuaClass {
+        name: "DirEntry",
+        description: "Directory entry from async.read_dir",
+        fields: &[
+            LuaField {
+                name: "path",
+                typ: "string",
+                description: "Full path to the entry",
+            },
+            LuaField {
+                name: "name",
+                typ: "string",
+                description: "Entry name (filename or directory name)",
+            },
+            LuaField {
+                name: "is_file",
+                typ: "boolean",
+                description: "Whether this is a file",
+            },
+            LuaField {
+                name: "is_dir",
+                typ: "boolean",
+                description: "Whether this is a directory",
+            },
+            LuaField {
+                name: "is_symlink",
+                typ: "boolean",
+                description: "Whether this is a symbolic link",
+            },
+        ],
+    },
+    LuaClass {
         name: "FileMetadata",
         description: "File metadata from async.metadata",
         fields: &[
@@ -1760,6 +1791,42 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "FileMetadata",
+    },
+    LuaFunction {
+        name: "read",
+        module: Some("async"),
+        description: "Read file as binary data asynchronously",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "File path",
+            optional: false,
+        }],
+        returns: "string",
+    },
+    LuaFunction {
+        name: "read_dir",
+        module: Some("async"),
+        description: "List directory contents asynchronously",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "Directory path",
+            optional: false,
+        }],
+        returns: "DirEntry[]",
+    },
+    LuaFunction {
+        name: "canonicalize",
+        module: Some("async"),
+        description: "Get canonical/absolute path asynchronously",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "Path to canonicalize",
+            optional: false,
+        }],
+        returns: "string",
     },
 ];
 
