@@ -90,6 +90,15 @@ git2 = { version = "0.20", default-features = false }
 # URL encoding
 urlencoding = "2.1"
 
+# Async runtime & HTTP client
+tokio = { version = "1.49", features = ["full"] }
+reqwest = { version = "0.13", features = ["json"] }
+futures = "0.3"
+
+# Dev server
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+
 [dev-dependencies]
 tempfile = "3.24"
 

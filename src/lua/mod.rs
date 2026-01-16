@@ -11,9 +11,10 @@
 //! ```
 
 mod assets;
-mod async_helpers;
+mod async_io;
 mod collections;
 mod content;
+mod coro;
 mod env;
 mod file_ops;
 mod git;
@@ -50,8 +51,9 @@ use std::path::Path;
 /// - Content: rs.render_markdown, rs.rss_date, rs.html_to_text, etc.
 /// - Images: rs.image_dimensions, rs.image_resize, rs.image_convert, rs.image_optimize
 /// - Assets: rs.build_css
-/// - Async (coroutine-based): rs.async.task, rs.async.await, etc.
+/// - Coroutines: rs.coro.task, rs.coro.await, rs.coro.yield, etc.
 /// - Parallel (rayon): rs.parallel.load_json, rs.parallel.read_files, etc.
+/// - Async I/O (tokio): rs.async.fetch, rs.async.read_file, rs.async.write_file, etc.
 pub fn register(
     lua: &Lua,
     project_root: &Path,
@@ -79,12 +81,16 @@ pub fn register(
     images::register(lua, &rs_module, &root, tracker.clone())?;
     assets::register(lua, &rs_module, &root, tracker.clone())?;
 
-    // Register async and parallel as submodules
-    let async_module = async_helpers::create_module(lua)?;
-    rs_module.set("async", async_module)?;
+    // Register coro and parallel as submodules
+    let coro_module = coro::create_module(lua)?;
+    rs_module.set("coro", coro_module)?;
 
     let parallel_module = parallel::create_module(lua, &root, sandbox, tracker.clone())?;
     rs_module.set("parallel", parallel_module)?;
+
+    let async_module = async_io::create_module(lua, &root, sandbox)?;
+    // Use raw_set to avoid "async" being a reserved word in some contexts
+    rs_module.raw_set("async", async_module)?;
 
     // Register as a preloaded module so require("rs-web") works
     let preload: Table = lua

@@ -118,7 +118,10 @@ impl Builder {
 
         // Stage 5: Load templates
         trace!("Stage 5: Loading templates");
-        let templates = Templates::new(&self.resolve_path(&self.config.paths.templates))?;
+        let templates = Templates::new(
+            &self.resolve_path(&self.config.paths.templates),
+            Some(self.tracker.clone()),
+        )?;
 
         // Stage 6: Render all pages in parallel
         trace!("Stage 6: Rendering {} pages", pages.len());
@@ -197,6 +200,53 @@ impl Builder {
         trace!("Creating output directories");
         fs::create_dir_all(&self.output_dir)?;
         fs::create_dir_all(self.output_dir.join("static"))?;
+        Ok(())
+    }
+
+    /// Remove pages that existed in the old build but not in the new one
+    fn remove_stale_pages(&self, old_pages: &[PageDef], new_pages: &[PageDef]) -> Result<()> {
+        use std::collections::HashSet;
+
+        // Collect new page paths
+        let new_paths: HashSet<&str> = new_pages.iter().map(|p| p.path.as_str()).collect();
+
+        // Find and remove stale pages
+        for old_page in old_pages {
+            if !new_paths.contains(old_page.path.as_str()) {
+                let relative_path = old_page.path.trim_matches('/');
+
+                // Check if path has a file extension
+                let has_extension = relative_path.contains('.')
+                    && !relative_path.ends_with('/')
+                    && relative_path
+                        .rsplit('/')
+                        .next()
+                        .map(|s| s.contains('.'))
+                        .unwrap_or(false);
+
+                let file_path = if has_extension {
+                    self.output_dir.join(relative_path)
+                } else if relative_path.is_empty() {
+                    self.output_dir.join("index.html")
+                } else {
+                    self.output_dir.join(relative_path).join("index.html")
+                };
+
+                if file_path.exists() {
+                    println!("  Removed: {}", old_page.path);
+                    fs::remove_file(&file_path)?;
+
+                    // Try to remove empty parent directory
+                    if let Some(parent) = file_path.parent()
+                        && parent != self.output_dir
+                        && parent.read_dir()?.next().is_none()
+                    {
+                        let _ = fs::remove_dir(parent);
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -333,6 +383,7 @@ impl Builder {
 
         // Template-only changes - re-render with cached data (skip Lua calls)
         if changes.reload_templates {
+            println!("  Changed: templates");
             return self.rebuild_templates_only();
         }
 
@@ -354,11 +405,29 @@ impl Builder {
             changed_paths.len()
         );
 
+        // Print changed files
+        for path in changed_paths {
+            if let Ok(rel) = path.strip_prefix(&self.project_dir) {
+                println!("  Changed: {}", rel.display());
+            } else {
+                println!("  Changed: {}", path.display());
+            }
+        }
+
         // Try incremental update if update_data function exists and we have cached data
         let global_data = if self.config.has_update_data() && self.cached_global_data.is_some() {
             debug!("Using incremental update_data()");
             let cached = self.cached_global_data.as_ref().unwrap();
-            self.config.call_update_data(cached, changed_paths)?
+            // Convert absolute paths to relative paths for Lua
+            let relative_paths: Vec<PathBuf> = changed_paths
+                .iter()
+                .filter_map(|p| {
+                    p.strip_prefix(&self.project_dir)
+                        .ok()
+                        .map(|r| r.to_path_buf())
+                })
+                .collect();
+            self.config.call_update_data(cached, &relative_paths)?
         } else {
             debug!("Using full data() reload");
             self.config.call_data()?
@@ -366,12 +435,20 @@ impl Builder {
 
         let pages = self.config.call_pages(&global_data)?;
 
+        // Remove stale pages that no longer exist in the new page list
+        if let Some(ref old_pages) = self.cached_pages {
+            self.remove_stale_pages(old_pages, &pages)?;
+        }
+
         // Update cache
         self.cached_global_data = Some(global_data.clone());
         self.cached_pages = Some(pages.clone());
 
         // Reload templates and re-render
-        let templates = Templates::new(&self.resolve_path(&self.config.paths.templates))?;
+        let templates = Templates::new(
+            &self.resolve_path(&self.config.paths.templates),
+            Some(self.tracker.clone()),
+        )?;
         let pipeline = Pipeline::from_config(&self.config);
         self.render_pages(&pages, &global_data, &templates, &pipeline)?;
 
@@ -398,7 +475,10 @@ impl Builder {
         debug!("Template-only rebuild with {} cached pages", pages.len());
 
         // Reload templates
-        let templates = Templates::new(&self.resolve_path(&self.config.paths.templates))?;
+        let templates = Templates::new(
+            &self.resolve_path(&self.config.paths.templates),
+            Some(self.tracker.clone()),
+        )?;
         let pipeline = Pipeline::from_config(&self.config);
 
         // Re-render all pages with cached data
@@ -410,8 +490,9 @@ impl Builder {
 
     /// Rebuild CSS by calling before_build hook (CSS is now handled via Lua)
     fn rebuild_css_only(&self) -> Result<()> {
+        println!("  Changed: styles");
         self.config.call_before_build()?;
-        println!("Rebuilt assets (via before_build hook)");
+        println!("Rebuilt CSS");
         Ok(())
     }
 
@@ -432,7 +513,7 @@ impl Builder {
                     fs::create_dir_all(parent)?;
                 }
                 copy_single_static_file(&src, &dest)?;
-                println!("Copied image: {}", rel_path.display());
+                println!("  Copied: static/{}", rel_path.display());
             }
         }
 
@@ -446,7 +527,7 @@ impl Builder {
                     fs::create_dir_all(parent)?;
                 }
                 copy_single_static_file(&src, &dest)?;
-                println!("Copied static file: {}", rel_path.display());
+                println!("  Copied: static/{}", rel_path.display());
             }
         }
 

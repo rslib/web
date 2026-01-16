@@ -40,7 +40,9 @@ pub fn create_module(
                     return None;
                 }
                 std::fs::read_to_string(&resolved).ok().and_then(|content| {
-                    tracker_ref.record_read(resolved, content.as_bytes());
+                    // Canonicalize path for consistent tracking
+                    let canonical = resolved.canonicalize().unwrap_or(resolved);
+                    tracker_ref.record_read(canonical, content.as_bytes());
                     serde_json::from_str(&content).ok()
                 })
             })
@@ -76,7 +78,8 @@ pub fn create_module(
                     return None;
                 }
                 std::fs::read_to_string(&resolved).ok().inspect(|content| {
-                    tracker_ref.record_read(resolved, content.as_bytes());
+                    let canonical = resolved.canonicalize().unwrap_or(resolved);
+                    tracker_ref.record_read(canonical, content.as_bytes());
                 })
             })
             .collect();
@@ -137,7 +140,8 @@ pub fn create_module(
                     return None;
                 }
                 std::fs::read_to_string(&resolved).ok().and_then(|content| {
-                    tracker_ref.record_read(resolved, content.as_bytes());
+                    let canonical = resolved.canonicalize().unwrap_or(resolved);
+                    tracker_ref.record_read(canonical, content.as_bytes());
                     serde_yaml::from_str(&content).ok()
                 })
             })
@@ -172,7 +176,8 @@ pub fn create_module(
                     return None;
                 }
                 std::fs::read_to_string(&resolved).ok().map(|raw| {
-                    tracker_ref.record_read(resolved, raw.as_bytes());
+                    let canonical = resolved.canonicalize().unwrap_or(resolved);
+                    tracker_ref.record_read(canonical, raw.as_bytes());
                     let (fm, content) = parse_frontmatter_content(&raw);
                     (fm, content, raw)
                 })

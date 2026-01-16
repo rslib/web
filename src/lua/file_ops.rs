@@ -35,8 +35,9 @@ pub fn register(
             Err(_) => return Ok(Value::Nil),
         };
 
-        // Track the read
-        tracker_clone.record_read(resolved, content.as_bytes());
+        // Track the read (canonicalize for consistent path matching)
+        let canonical = resolved.canonicalize().unwrap_or(resolved);
+        tracker_clone.record_read(canonical, content.as_bytes());
 
         match serde_json::from_str::<serde_json::Value>(&content) {
             Ok(v) => lua.to_value(&v),
@@ -62,8 +63,9 @@ pub fn register(
             Err(_) => return Ok(Value::Nil),
         };
 
-        // Track the read
-        tracker_clone.record_read(resolved, content.as_bytes());
+        // Track the read (canonicalize for consistent path matching)
+        let canonical = resolved.canonicalize().unwrap_or(resolved);
+        tracker_clone.record_read(canonical, content.as_bytes());
 
         match serde_yaml::from_str::<serde_json::Value>(&content) {
             Ok(v) => lua.to_value(&v),
@@ -89,8 +91,9 @@ pub fn register(
             Err(_) => return Ok(Value::Nil),
         };
 
-        // Track the read
-        tracker_clone.record_read(resolved, content.as_bytes());
+        // Track the read (canonicalize for consistent path matching)
+        let canonical = resolved.canonicalize().unwrap_or(resolved);
+        tracker_clone.record_read(canonical, content.as_bytes());
 
         match toml::from_str::<toml::Value>(&content) {
             Ok(v) => {
@@ -125,8 +128,9 @@ pub fn register(
             Err(_) => return Ok(Value::Nil),
         };
 
-        // Track the read
-        tracker_clone.record_read(resolved, raw.as_bytes());
+        // Track the read (canonicalize for consistent path matching)
+        let canonical = resolved.canonicalize().unwrap_or(resolved);
+        tracker_clone.record_read(canonical, raw.as_bytes());
 
         // Parse frontmatter (YAML between --- or TOML between +++)
         let (frontmatter, content) = parse_frontmatter_content(&raw);
@@ -161,8 +165,9 @@ pub fn register(
 
         match std::fs::read_to_string(&resolved) {
             Ok(content) => {
-                // Track the read
-                tracker_clone.record_read(resolved, content.as_bytes());
+                // Track the read (canonicalize for consistent path matching)
+                let canonical = resolved.canonicalize().unwrap_or(resolved);
+                tracker_clone.record_read(canonical, content.as_bytes());
                 Ok(Value::String(lua.create_string(&content)?))
             }
             Err(_) => Ok(Value::Nil),
@@ -297,8 +302,9 @@ pub fn register(
         }
         match std::fs::write(&resolved, &content) {
             Ok(_) => {
-                // Track the write
-                tracker_clone.record_write(resolved, content.as_bytes());
+                // Track the write (canonicalize for consistent path matching)
+                let canonical = resolved.canonicalize().unwrap_or(resolved);
+                tracker_clone.record_write(canonical, content.as_bytes());
                 Ok(true)
             }
             Err(_) => Ok(false),
@@ -336,9 +342,11 @@ pub fn register(
 
         match std::fs::copy(&src_resolved, &dest_resolved) {
             Ok(_) => {
-                // Track both read and write
-                tracker_clone.record_read(src_resolved, &content);
-                tracker_clone.record_write(dest_resolved, &content);
+                // Track both read and write (canonicalize for consistent path matching)
+                let src_canonical = src_resolved.canonicalize().unwrap_or(src_resolved);
+                let dest_canonical = dest_resolved.canonicalize().unwrap_or(dest_resolved);
+                tracker_clone.record_read(src_canonical, &content);
+                tracker_clone.record_write(dest_canonical, &content);
                 Ok(true)
             }
             Err(_) => Ok(false),

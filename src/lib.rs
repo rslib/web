@@ -7,6 +7,7 @@
 //! - **Link graph** with backlinks and visualization (Obsidian-style)
 //! - **RSS feed** generation with section filtering
 //! - **Parallel processing** for fast builds
+//! - **Live reload** with automatic browser refresh during watch mode
 //!
 //! ## Quick Start
 //!
@@ -17,8 +18,11 @@
 //! # Build to custom output directory
 //! rs-web build --output public
 //!
-//! # Watch for changes and rebuild incrementally
+//! # Watch for changes and rebuild incrementally with live reload
 //! rs-web build --watch
+//!
+//! # Watch mode with custom port
+//! rs-web build --watch --port 8080
 //!
 //! # Enable debug logging
 //! rs-web --debug build
@@ -241,6 +245,7 @@ pub mod encryption;
 pub mod git;
 pub mod lua;
 pub mod markdown;
+pub mod server;
 pub mod templates;
 pub mod text;
 pub mod watch;

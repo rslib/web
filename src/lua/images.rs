@@ -27,9 +27,12 @@ pub fn register(
             root_clone.join(&path)
         };
 
-        // Read file for tracking
+        // Read file for tracking (canonicalize for consistent path matching)
         if let Ok(content) = std::fs::read(&full_path) {
-            tracker_clone.record_read(full_path.clone(), &content);
+            let canonical = full_path
+                .canonicalize()
+                .unwrap_or_else(|_| full_path.clone());
+            tracker_clone.record_read(canonical, &content);
         }
 
         match image::open(&full_path) {
@@ -71,10 +74,13 @@ pub fn register(
                 root_clone.join(&output)
             };
 
-            // Read input for tracking
+            // Read input for tracking (canonicalize for consistent path matching)
             let input_content = std::fs::read(&input_path)
                 .map_err(|e| mlua::Error::external(format!("Failed to read image: {}", e)))?;
-            tracker_clone.record_read(input_path.clone(), &input_content);
+            let input_canonical = input_path
+                .canonicalize()
+                .unwrap_or_else(|_| input_path.clone());
+            tracker_clone.record_read(input_canonical, &input_content);
 
             let img = image::open(&input_path)
                 .map_err(|e| mlua::Error::external(format!("Failed to open image: {}", e)))?;
@@ -111,7 +117,8 @@ pub fn register(
                     let webp = encoder.encode(quality);
                     std::fs::write(&output_path, &*webp)
                         .map_err(|e| mlua::Error::external(format!("Failed to write: {}", e)))?;
-                    tracker_clone.record_write(output_path, &webp);
+                    let output_canonical = output_path.canonicalize().unwrap_or(output_path);
+                    tracker_clone.record_write(output_canonical, &webp);
                 }
                 _ => {
                     resized
@@ -119,7 +126,8 @@ pub fn register(
                         .map_err(|e| mlua::Error::external(format!("Failed to save: {}", e)))?;
                     // Track write by reading back (image crate doesn't give us bytes directly)
                     if let Ok(output_content) = std::fs::read(&output_path) {
-                        tracker_clone.record_write(output_path, &output_content);
+                        let output_canonical = output_path.canonicalize().unwrap_or(output_path);
+                        tracker_clone.record_write(output_canonical, &output_content);
                     }
                 }
             }
@@ -154,10 +162,13 @@ pub fn register(
                 root_clone.join(&output)
             };
 
-            // Read input for tracking
+            // Read input for tracking (canonicalize for consistent path matching)
             let input_content = std::fs::read(&input_path)
                 .map_err(|e| mlua::Error::external(format!("Failed to read image: {}", e)))?;
-            tracker_clone.record_read(input_path.clone(), &input_content);
+            let input_canonical = input_path
+                .canonicalize()
+                .unwrap_or_else(|_| input_path.clone());
+            tracker_clone.record_read(input_canonical, &input_content);
 
             let img = image::open(&input_path)
                 .map_err(|e| mlua::Error::external(format!("Failed to open image: {}", e)))?;
@@ -185,13 +196,15 @@ pub fn register(
                     let webp = encoder.encode(quality);
                     std::fs::write(&output_path, &*webp)
                         .map_err(|e| mlua::Error::external(format!("Failed to write: {}", e)))?;
-                    tracker_clone.record_write(output_path, &webp);
+                    let output_canonical = output_path.canonicalize().unwrap_or(output_path);
+                    tracker_clone.record_write(output_canonical, &webp);
                 }
                 _ => {
                     img.save(&output_path)
                         .map_err(|e| mlua::Error::external(format!("Failed to save: {}", e)))?;
                     if let Ok(output_content) = std::fs::read(&output_path) {
-                        tracker_clone.record_write(output_path, &output_content);
+                        let output_canonical = output_path.canonicalize().unwrap_or(output_path);
+                        tracker_clone.record_write(output_canonical, &output_content);
                     }
                 }
             }
@@ -224,10 +237,13 @@ pub fn register(
                 root_clone.join(&output)
             };
 
-            // Read input for tracking
+            // Read input for tracking (canonicalize for consistent path matching)
             let input_content = std::fs::read(&input_path)
                 .map_err(|e| mlua::Error::external(format!("Failed to read image: {}", e)))?;
-            tracker_clone.record_read(input_path.clone(), &input_content);
+            let input_canonical = input_path
+                .canonicalize()
+                .unwrap_or_else(|_| input_path.clone());
+            tracker_clone.record_read(input_canonical, &input_content);
 
             let img = image::open(&input_path)
                 .map_err(|e| mlua::Error::external(format!("Failed to open image: {}", e)))?;
@@ -253,14 +269,16 @@ pub fn register(
                     let webp = encoder.encode(quality);
                     std::fs::write(&output_path, &*webp)
                         .map_err(|e| mlua::Error::external(format!("Failed to write: {}", e)))?;
-                    tracker_clone.record_write(output_path, &webp);
+                    let output_canonical = output_path.canonicalize().unwrap_or(output_path);
+                    tracker_clone.record_write(output_canonical, &webp);
                 }
                 _ => {
                     // For non-webp, just save (quality not directly controllable for png)
                     img.save(&output_path)
                         .map_err(|e| mlua::Error::external(format!("Failed to save: {}", e)))?;
                     if let Ok(output_content) = std::fs::read(&output_path) {
-                        tracker_clone.record_write(output_path, &output_content);
+                        let output_canonical = output_path.canonicalize().unwrap_or(output_path);
+                        tracker_clone.record_write(output_canonical, &output_content);
                     }
                 }
             }

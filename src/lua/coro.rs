@@ -1,17 +1,17 @@
-//! Async/await helpers for Lua API (coroutine-based)
+//! Coroutine helpers for Lua API
 //!
-//! Functions: async.task, async.await, async.yield, async.all, async.race, async.sleep
+//! Functions: coro.task, coro.await, coro.yield, coro.all, coro.race, coro.sleep
 
 use mlua::{Lua, Result, Table};
 
-/// Create the async module table
+/// Create the coro module table
 pub fn create_module(lua: &Lua) -> Result<Table> {
-    // Create async module using Lua code
-    let async_code = r#"
-        local async = {}
+    // Create coro module using Lua code
+    let coro_code = r#"
+        local coro = {}
 
         -- Create a task from a function (wraps in coroutine)
-        function async.task(fn)
+        function coro.task(fn)
             return {
                 _co = coroutine.create(fn),
                 _completed = false,
@@ -20,7 +20,7 @@ pub fn create_module(lua: &Lua) -> Result<Table> {
         end
 
         -- Run a task to completion
-        function async.await(task)
+        function coro.await(task)
             if task._completed then
                 return task._result
             end
@@ -36,12 +36,12 @@ pub fn create_module(lua: &Lua) -> Result<Table> {
         end
 
         -- Yield from current task (for cooperative multitasking)
-        function async.yield(value)
+        function coro.yield(value)
             return coroutine.yield(value)
         end
 
         -- Run multiple tasks concurrently (interleaved execution)
-        function async.all(tasks)
+        function coro.all(tasks)
             local results = {}
             local pending = {}
 
@@ -74,7 +74,7 @@ pub fn create_module(lua: &Lua) -> Result<Table> {
         end
 
         -- Run tasks and return first completed result
-        function async.race(tasks)
+        function coro.race(tasks)
             while true do
                 for i, task in ipairs(tasks) do
                     if coroutine.status(task._co) ~= "dead" then
@@ -93,15 +93,15 @@ pub fn create_module(lua: &Lua) -> Result<Table> {
         end
 
         -- Sleep/delay (yields N times for cooperative scheduling)
-        function async.sleep(n)
+        function coro.sleep(n)
             for _ = 1, (n or 1) do
                 coroutine.yield()
             end
         end
 
-        return async
+        return coro
     "#;
 
-    let async_module: Table = lua.load(async_code).eval()?;
-    Ok(async_module)
+    let coro_module: Table = lua.load(coro_code).eval()?;
+    Ok(coro_module)
 }

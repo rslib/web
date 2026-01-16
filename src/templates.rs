@@ -7,6 +7,7 @@ use tera::Tera;
 use crate::config::{Config, PageDef};
 use crate::data::register_data_functions;
 use crate::git::register_git_functions;
+use crate::lua::SharedTracker;
 
 /// Template engine wrapper
 pub struct Templates {
@@ -14,7 +15,7 @@ pub struct Templates {
 }
 
 impl Templates {
-    pub fn new(template_dir: &Path) -> Result<Self> {
+    pub fn new(template_dir: &Path, tracker: Option<SharedTracker>) -> Result<Self> {
         debug!("Loading templates from {:?}", template_dir);
         let template_dir_str = template_dir.to_string_lossy();
         let pattern = format!("{}/**/*", template_dir_str);
@@ -22,7 +23,7 @@ impl Templates {
             .with_context(|| format!("Failed to load templates from {}", template_dir_str))?;
 
         register_git_functions(&mut tera);
-        register_data_functions(&mut tera);
+        register_data_functions(&mut tera, tracker);
 
         let template_count = tera.get_template_names().count();
         debug!("Loaded {} templates", template_count);

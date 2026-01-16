@@ -59,8 +59,9 @@ pub fn register(
                     mlua::Error::external(format!("Failed to read {:?}: {}", path, e))
                 })?;
 
-                // Track each CSS file read
-                tracker_clone.record_read(path.clone(), content.as_bytes());
+                // Track each CSS file read (canonicalize for consistent path matching)
+                let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+                tracker_clone.record_read(canonical, content.as_bytes());
 
                 if !css_buffer.is_empty() {
                     css_buffer.push('\n');
@@ -94,8 +95,9 @@ pub fn register(
             fs::write(&output, &output_content)
                 .map_err(|e| mlua::Error::external(format!("Failed to write CSS: {}", e)))?;
 
-            // Track the write
-            tracker_clone.record_write(output, output_content.as_bytes());
+            // Track the write (canonicalize for consistent path matching)
+            let canonical = output.canonicalize().unwrap_or(output);
+            tracker_clone.record_write(canonical, output_content.as_bytes());
 
             Ok(Value::Boolean(true))
         },

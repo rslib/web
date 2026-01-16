@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tera::{Function, Value};
 
+use crate::lua::SharedTracker;
 use crate::text::html_to_text;
 
 /// Expand ~ to home directory
@@ -15,8 +16,8 @@ fn expand_tilde(path: &str) -> PathBuf {
 
 /// load_json(path) - Load and parse a JSON file
 /// Returns the parsed JSON value, or Null if file doesn't exist or is invalid
-pub fn make_load_json() -> impl Function {
-    |args: &HashMap<String, Value>| -> tera::Result<Value> {
+pub fn make_load_json(tracker: Option<SharedTracker>) -> impl Function {
+    move |args: &HashMap<String, Value>| -> tera::Result<Value> {
         let path = args
             .get("path")
             .and_then(|v| v.as_str())
@@ -29,6 +30,12 @@ pub fn make_load_json() -> impl Function {
             Err(_) => return Ok(Value::Null),
         };
 
+        // Track file read (canonicalize path for consistent matching)
+        if let Some(ref tracker) = tracker {
+            let canonical = path.canonicalize().unwrap_or(path);
+            tracker.record_read(canonical, content.as_bytes());
+        }
+
         match serde_json::from_str(&content) {
             Ok(v) => Ok(v),
             Err(_) => Ok(Value::Null),
@@ -38,8 +45,8 @@ pub fn make_load_json() -> impl Function {
 
 /// read_file(path) - Read a file as text
 /// Returns the file content as string, or Null if file doesn't exist
-pub fn make_read_file() -> impl Function {
-    |args: &HashMap<String, Value>| -> tera::Result<Value> {
+pub fn make_read_file(tracker: Option<SharedTracker>) -> impl Function {
+    move |args: &HashMap<String, Value>| -> tera::Result<Value> {
         let path = args
             .get("path")
             .and_then(|v| v.as_str())
@@ -48,7 +55,14 @@ pub fn make_read_file() -> impl Function {
         let path = expand_tilde(path);
 
         match std::fs::read_to_string(&path) {
-            Ok(content) => Ok(Value::String(content)),
+            Ok(content) => {
+                // Track file read (canonicalize path for consistent matching)
+                if let Some(ref tracker) = tracker {
+                    let canonical = path.canonicalize().unwrap_or(path);
+                    tracker.record_read(canonical, content.as_bytes());
+                }
+                Ok(Value::String(content))
+            }
             Err(_) => Ok(Value::Null),
         }
     }
@@ -56,8 +70,8 @@ pub fn make_read_file() -> impl Function {
 
 /// read_markdown(path) - Read a Markdown file and return as HTML
 /// Returns the rendered HTML as string, or Null if file doesn't exist
-pub fn make_read_markdown() -> impl Function {
-    |args: &HashMap<String, Value>| -> tera::Result<Value> {
+pub fn make_read_markdown(tracker: Option<SharedTracker>) -> impl Function {
+    move |args: &HashMap<String, Value>| -> tera::Result<Value> {
         let path = args
             .get("path")
             .and_then(|v| v.as_str())
@@ -67,6 +81,12 @@ pub fn make_read_markdown() -> impl Function {
 
         match std::fs::read_to_string(&path) {
             Ok(content) => {
+                // Track file read (canonicalize path for consistent matching)
+                if let Some(ref tracker) = tracker {
+                    let canonical = path.canonicalize().unwrap_or(path);
+                    tracker.record_read(canonical, content.as_bytes());
+                }
+
                 let options = Options::all();
                 let parser = Parser::new_ext(&content, options);
                 let mut html_output = String::new();
@@ -81,8 +101,8 @@ pub fn make_read_markdown() -> impl Function {
 /// list_files(path, pattern?) - List files with metadata
 /// Returns array of objects: [{path, name, stem, ext}, ...]
 /// Optional pattern argument supports glob syntax (e.g., "solution.*", "*.py")
-pub fn make_list_files() -> impl Function {
-    |args: &HashMap<String, Value>| -> tera::Result<Value> {
+pub fn make_list_files(_tracker: Option<SharedTracker>) -> impl Function {
+    move |args: &HashMap<String, Value>| -> tera::Result<Value> {
         let path = args
             .get("path")
             .and_then(|v| v.as_str())
@@ -96,6 +116,9 @@ pub fn make_list_files() -> impl Function {
         // Build glob pattern
         let glob_pattern = base_path.join(pattern);
         let glob_str = glob_pattern.to_string_lossy();
+
+        // Note: Directory listings are not tracked - changes to directory contents
+        // will trigger full rebuilds via the file watcher
 
         let mut files: Vec<Value> = Vec::new();
 
@@ -149,14 +172,17 @@ pub fn make_list_files() -> impl Function {
 
 /// list_dirs(path) - List subdirectories
 /// Returns array of directory names (strings)
-pub fn make_list_dirs() -> impl Function {
-    |args: &HashMap<String, Value>| -> tera::Result<Value> {
+pub fn make_list_dirs(_tracker: Option<SharedTracker>) -> impl Function {
+    move |args: &HashMap<String, Value>| -> tera::Result<Value> {
         let path = args
             .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| tera::Error::msg("list_dirs requires 'path' argument"))?;
 
         let base_path = expand_tilde(path);
+
+        // Note: Directory listings are not tracked - changes to directory contents
+        // will trigger full rebuilds via the file watcher
 
         let mut dirs: Vec<Value> = Vec::new();
 
@@ -327,12 +353,12 @@ fn convert_code(text: &str) -> String {
 }
 
 /// Register all data functions with Tera
-pub fn register_data_functions(tera: &mut tera::Tera) {
-    tera.register_function("load_json", make_load_json());
-    tera.register_function("read_file", make_read_file());
-    tera.register_function("read_markdown", make_read_markdown());
-    tera.register_function("list_files", make_list_files());
-    tera.register_function("list_dirs", make_list_dirs());
+pub fn register_data_functions(tera: &mut tera::Tera, tracker: Option<SharedTracker>) {
+    tera.register_function("load_json", make_load_json(tracker.clone()));
+    tera.register_function("read_file", make_read_file(tracker.clone()));
+    tera.register_function("read_markdown", make_read_markdown(tracker.clone()));
+    tera.register_function("list_files", make_list_files(tracker.clone()));
+    tera.register_function("list_dirs", make_list_dirs(tracker));
     tera.register_filter("markdown", markdown_filter);
     tera.register_filter("linebreaks", linebreaks_filter);
     tera.register_filter("html_to_text", html_to_text_filter);
@@ -361,7 +387,7 @@ mod tests {
         let json_path = dir.path().join("test.json");
         fs::write(&json_path, r#"{"name": "test", "value": 42}"#).unwrap();
 
-        let func = make_load_json();
+        let func = make_load_json(None);
         let mut args = HashMap::new();
         args.insert(
             "path".to_string(),
@@ -375,7 +401,7 @@ mod tests {
 
     #[test]
     fn test_load_json_missing_file() {
-        let func = make_load_json();
+        let func = make_load_json(None);
         let mut args = HashMap::new();
         args.insert(
             "path".to_string(),
@@ -392,7 +418,7 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "Hello, World!").unwrap();
 
-        let func = make_read_file();
+        let func = make_read_file(None);
         let mut args = HashMap::new();
         args.insert(
             "path".to_string(),
@@ -405,7 +431,7 @@ mod tests {
 
     #[test]
     fn test_read_file_missing() {
-        let func = make_read_file();
+        let func = make_read_file(None);
         let mut args = HashMap::new();
         args.insert(
             "path".to_string(),
@@ -423,7 +449,7 @@ mod tests {
         fs::write(dir.path().join("solution.cpp"), "int main(){}").unwrap();
         fs::write(dir.path().join("README.md"), "# Hello").unwrap();
 
-        let func = make_list_files();
+        let func = make_list_files(None);
         let mut args = HashMap::new();
         args.insert(
             "path".to_string(),
@@ -459,7 +485,7 @@ mod tests {
         fs::create_dir(dir.path().join(".hidden")).unwrap();
         fs::write(dir.path().join("file.txt"), "not a dir").unwrap();
 
-        let func = make_list_dirs();
+        let func = make_list_dirs(None);
         let mut args = HashMap::new();
         args.insert(
             "path".to_string(),

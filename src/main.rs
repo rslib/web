@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use rs_web::build::Builder;
 use rs_web::config::Config;
+use rs_web::server::{ReloadMessage, ServerConfig, notify_reload, run_server};
 use rs_web::watch::{FileWatcher, format_changes};
 
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]
@@ -76,6 +77,32 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Start development server with live reload
+    Serve {
+        /// Project directory containing config.lua
+        #[arg(short = 'd', long = "dir")]
+        directory: Option<PathBuf>,
+
+        /// Output directory to serve (relative to cwd; defaults to config's output_dir)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Port to listen on
+        #[arg(short, long, default_value = "3000")]
+        port: u16,
+
+        /// Host to bind to
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// Watch for changes and rebuild (enables live reload)
+        #[arg(short, long)]
+        watch: bool,
+
+        /// Build before serving (default: true unless --no-build)
+        #[arg(long = "no-build")]
+        no_build: bool,
+    },
 }
 
 fn init_logger(debug: bool, log_level: Option<LogLevel>) {
@@ -103,7 +130,8 @@ fn init_logger(debug: bool, log_level: Option<LogLevel>) {
         .init();
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     init_logger(cli.debug, cli.log_level);
@@ -201,6 +229,66 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Commands::Serve {
+            directory,
+            output,
+            port,
+            host,
+            watch,
+            no_build,
+        } => {
+            // Determine project directory
+            let project_dir = directory.unwrap_or_else(|| PathBuf::from("."));
+            let project_dir = project_dir.canonicalize().unwrap_or(project_dir);
+
+            // Load config from project directory
+            let mut config = Config::load(&project_dir)?;
+
+            // Allow overriding base_url via environment variable
+            if let Ok(base_url) = std::env::var("SITE_BASE_URL") {
+                log::info!("Using base_url from SITE_BASE_URL: {}", base_url);
+                config.site.base_url = base_url;
+            }
+
+            // Output directory
+            let output_dir = if let Some(out) = output {
+                if out.is_absolute() {
+                    out
+                } else {
+                    std::env::current_dir()?.join(out)
+                }
+            } else {
+                project_dir.join(&config.build.output_dir)
+            };
+
+            // Build if needed
+            if !no_build {
+                let start = Instant::now();
+                let mut builder = Builder::new(config, output_dir.clone(), project_dir.clone());
+                builder.build()?;
+                println!("Built in {:?}", start.elapsed());
+                // Reload config for server
+                config = Config::load(&project_dir)?;
+            }
+
+            // Start the server
+            let server_config = ServerConfig {
+                port,
+                host: host.clone(),
+                output_dir: output_dir.clone(),
+            };
+
+            let reload_tx = run_server(server_config).await?;
+
+            // Watch mode with live reload
+            if watch {
+                run_serve_watch_loop(config, &project_dir, &output_dir, reload_tx)?;
+            } else {
+                // Just keep running
+                println!("Press Ctrl+C to stop.\n");
+                tokio::signal::ctrl_c().await?;
+            }
+        }
     }
 
     Ok(())
@@ -234,6 +322,66 @@ fn run_watch_loop(mut builder: Builder, project_dir: &Path, output_dir: &Path) -
         match builder.incremental_build(&changes) {
             Ok(()) => {
                 println!("Rebuilt in {:?}\n", start.elapsed());
+            }
+            Err(e) => {
+                error!("Build failed: {}", e);
+            }
+        }
+    }
+}
+
+/// Run the watch loop with live reload for serve command
+fn run_serve_watch_loop(
+    config: Config,
+    project_dir: &Path,
+    output_dir: &Path,
+    reload_tx: tokio::sync::broadcast::Sender<ReloadMessage>,
+) -> Result<()> {
+    println!("Watching for changes. Press Ctrl+C to stop.\n");
+
+    let watcher = FileWatcher::new(project_dir, &config, output_dir)?;
+    let mut builder = Builder::new(config, output_dir.to_path_buf(), project_dir.to_path_buf());
+
+    loop {
+        let changes = watcher.wait_for_changes()?;
+
+        if changes.is_empty() {
+            continue;
+        }
+
+        println!("\nChange detected: {}", format_changes(&changes));
+        let start = Instant::now();
+
+        // Check if only CSS changed for hot reload
+        let css_only = changes.rebuild_css
+            && !changes.full_rebuild
+            && !changes.reload_templates
+            && !changes.rebuild_home
+            && changes.content_files.is_empty()
+            && changes.static_files.is_empty()
+            && changes.image_files.is_empty();
+
+        // Reload config if it changed
+        if changes.full_rebuild
+            && let Err(e) = builder.reload_config()
+        {
+            error!("Failed to reload config: {}", e);
+            continue;
+        }
+
+        // Perform incremental build
+        match builder.incremental_build(&changes) {
+            Ok(()) => {
+                println!("Rebuilt in {:?}", start.elapsed());
+
+                // Send reload notification
+                if css_only {
+                    notify_reload(&reload_tx, ReloadMessage::CssReload("*".to_string()));
+                    println!("CSS hot reloaded\n");
+                } else {
+                    notify_reload(&reload_tx, ReloadMessage::Reload);
+                    println!("Page reloaded\n");
+                }
             }
             Err(e) => {
                 error!("Build failed: {}", e);

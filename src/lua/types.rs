@@ -331,8 +331,8 @@ pub static LUA_CLASSES: &[LuaClass] = &[
         ],
     },
     LuaClass {
-        name: "AsyncTask",
-        description: "Async task wrapper for coroutine-based concurrency",
+        name: "CoroTask",
+        description: "Coroutine task wrapper for cooperative multitasking",
         fields: &[
             LuaField {
                 name: "_co",
@@ -348,6 +348,103 @@ pub static LUA_CLASSES: &[LuaClass] = &[
                 name: "_result",
                 typ: "any",
                 description: "Task result",
+            },
+        ],
+    },
+    LuaClass {
+        name: "AsyncTask",
+        description: "Async task handle for tokio-backed I/O operations",
+        fields: &[LuaField {
+            name: "is_completed",
+            typ: "fun(): boolean",
+            description: "Check if task has completed",
+        }],
+    },
+    LuaClass {
+        name: "FetchResponse",
+        description: "HTTP response from async.fetch",
+        fields: &[
+            LuaField {
+                name: "status",
+                typ: "number",
+                description: "HTTP status code",
+            },
+            LuaField {
+                name: "ok",
+                typ: "boolean",
+                description: "Whether request was successful (2xx)",
+            },
+            LuaField {
+                name: "body",
+                typ: "string",
+                description: "Response body as string",
+            },
+            LuaField {
+                name: "headers",
+                typ: "table<string, string>",
+                description: "Response headers",
+            },
+            LuaField {
+                name: "json",
+                typ: "fun(): table",
+                description: "Parse body as JSON",
+            },
+        ],
+    },
+    LuaClass {
+        name: "FetchOptions",
+        description: "Options for async.fetch",
+        fields: &[
+            LuaField {
+                name: "method",
+                typ: "string?",
+                description: "HTTP method: GET|POST|PUT|DELETE|PATCH|HEAD (default: GET)",
+            },
+            LuaField {
+                name: "headers",
+                typ: "table<string, string>?",
+                description: "Request headers",
+            },
+            LuaField {
+                name: "body",
+                typ: "string|table?",
+                description: "Request body (table will be JSON encoded)",
+            },
+            LuaField {
+                name: "timeout",
+                typ: "number?",
+                description: "Timeout in seconds",
+            },
+        ],
+    },
+    LuaClass {
+        name: "FileMetadata",
+        description: "File metadata from async.metadata",
+        fields: &[
+            LuaField {
+                name: "is_file",
+                typ: "boolean",
+                description: "Whether this is a file",
+            },
+            LuaField {
+                name: "is_dir",
+                typ: "boolean",
+                description: "Whether this is a directory",
+            },
+            LuaField {
+                name: "len",
+                typ: "number",
+                description: "File size in bytes",
+            },
+            LuaField {
+                name: "readonly",
+                typ: "boolean",
+                description: "Whether file is read-only",
+            },
+            LuaField {
+                name: "modified",
+                typ: "number?",
+                description: "Unix timestamp of last modification",
             },
         ],
     },
@@ -1211,26 +1308,26 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         ],
         returns: "boolean",
     },
-    // ASYNC MODULE
+    // CORO MODULE
     LuaFunction {
         name: "task",
-        module: Some("async"),
-        description: "Create async task from function",
+        module: Some("coro"),
+        description: "Create coroutine task from function",
         params: &[LuaParam {
             name: "fn",
             typ: "function",
             description: "Function to wrap",
             optional: false,
         }],
-        returns: "AsyncTask",
+        returns: "CoroTask",
     },
     LuaFunction {
         name: "await",
-        module: Some("async"),
+        module: Some("coro"),
         description: "Run task to completion",
         params: &[LuaParam {
             name: "task",
-            typ: "AsyncTask",
+            typ: "CoroTask",
             description: "Task to run",
             optional: false,
         }],
@@ -1238,7 +1335,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     },
     LuaFunction {
         name: "yield",
-        module: Some("async"),
+        module: Some("coro"),
         description: "Yield from current task",
         params: &[LuaParam {
             name: "value",
@@ -1250,11 +1347,11 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     },
     LuaFunction {
         name: "all",
-        module: Some("async"),
+        module: Some("coro"),
         description: "Run multiple tasks concurrently",
         params: &[LuaParam {
             name: "tasks",
-            typ: "AsyncTask[]",
+            typ: "CoroTask[]",
             description: "Tasks to run",
             optional: false,
         }],
@@ -1262,11 +1359,11 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     },
     LuaFunction {
         name: "race",
-        module: Some("async"),
+        module: Some("coro"),
         description: "Run tasks and return first completed",
         params: &[LuaParam {
             name: "tasks",
-            typ: "AsyncTask[]",
+            typ: "CoroTask[]",
             description: "Tasks to race",
             optional: false,
         }],
@@ -1274,7 +1371,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     },
     LuaFunction {
         name: "sleep",
-        module: Some("async"),
+        module: Some("coro"),
         description: "Sleep/delay (yields N times for cooperative scheduling)",
         params: &[LuaParam {
             name: "n",
@@ -1411,6 +1508,259 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         ],
         returns: "U",
     },
+    // ASYNC MODULE (tokio-backed)
+    LuaFunction {
+        name: "fetch",
+        module: Some("async"),
+        description: "Fetch URL (blocking)",
+        params: &[
+            LuaParam {
+                name: "url",
+                typ: "string",
+                description: "URL to fetch",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "FetchOptions",
+                description: "Request options",
+                optional: true,
+            },
+        ],
+        returns: "FetchResponse",
+    },
+    LuaFunction {
+        name: "fetch_json",
+        module: Some("async"),
+        description: "Fetch URL and parse as JSON",
+        params: &[
+            LuaParam {
+                name: "url",
+                typ: "string",
+                description: "URL to fetch",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "FetchOptions",
+                description: "Request options",
+                optional: true,
+            },
+        ],
+        returns: "table",
+    },
+    LuaFunction {
+        name: "fetch_all",
+        module: Some("async"),
+        description: "Fetch multiple URLs concurrently",
+        params: &[LuaParam {
+            name: "requests",
+            typ: "(string|{url: string, options?: FetchOptions})[]",
+            description: "URLs or request objects",
+            optional: false,
+        }],
+        returns: "FetchResponse[]",
+    },
+    LuaFunction {
+        name: "spawn",
+        module: Some("async"),
+        description: "Spawn async fetch task for later await",
+        params: &[
+            LuaParam {
+                name: "url",
+                typ: "string",
+                description: "URL to fetch",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "FetchOptions",
+                description: "Request options",
+                optional: true,
+            },
+        ],
+        returns: "AsyncTask",
+    },
+    LuaFunction {
+        name: "await",
+        module: Some("async"),
+        description: "Await spawned async task",
+        params: &[LuaParam {
+            name: "task",
+            typ: "AsyncTask",
+            description: "Task to await",
+            optional: false,
+        }],
+        returns: "FetchResponse",
+    },
+    LuaFunction {
+        name: "await_all",
+        module: Some("async"),
+        description: "Await multiple async tasks",
+        params: &[LuaParam {
+            name: "tasks",
+            typ: "AsyncTask[]",
+            description: "Tasks to await",
+            optional: false,
+        }],
+        returns: "FetchResponse[]",
+    },
+    LuaFunction {
+        name: "read_file",
+        module: Some("async"),
+        description: "Read file asynchronously",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "File path",
+            optional: false,
+        }],
+        returns: "string",
+    },
+    LuaFunction {
+        name: "write_file",
+        module: Some("async"),
+        description: "Write file asynchronously",
+        params: &[
+            LuaParam {
+                name: "path",
+                typ: "string",
+                description: "File path",
+                optional: false,
+            },
+            LuaParam {
+                name: "content",
+                typ: "string",
+                description: "Content to write",
+                optional: false,
+            },
+        ],
+        returns: "boolean",
+    },
+    LuaFunction {
+        name: "read_files",
+        module: Some("async"),
+        description: "Read multiple files concurrently",
+        params: &[LuaParam {
+            name: "paths",
+            typ: "string[]",
+            description: "File paths",
+            optional: false,
+        }],
+        returns: "(string|nil)[]",
+    },
+    LuaFunction {
+        name: "load_json",
+        module: Some("async"),
+        description: "Load and parse JSON file asynchronously",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "JSON file path",
+            optional: false,
+        }],
+        returns: "table",
+    },
+    LuaFunction {
+        name: "copy_file",
+        module: Some("async"),
+        description: "Copy file asynchronously",
+        params: &[
+            LuaParam {
+                name: "src",
+                typ: "string",
+                description: "Source path",
+                optional: false,
+            },
+            LuaParam {
+                name: "dst",
+                typ: "string",
+                description: "Destination path",
+                optional: false,
+            },
+        ],
+        returns: "number",
+    },
+    LuaFunction {
+        name: "rename",
+        module: Some("async"),
+        description: "Rename/move file or directory asynchronously",
+        params: &[
+            LuaParam {
+                name: "src",
+                typ: "string",
+                description: "Source path",
+                optional: false,
+            },
+            LuaParam {
+                name: "dst",
+                typ: "string",
+                description: "Destination path",
+                optional: false,
+            },
+        ],
+        returns: "boolean",
+    },
+    LuaFunction {
+        name: "create_dir",
+        module: Some("async"),
+        description: "Create directory (including parents) asynchronously",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "Directory path",
+            optional: false,
+        }],
+        returns: "boolean",
+    },
+    LuaFunction {
+        name: "remove_file",
+        module: Some("async"),
+        description: "Remove file asynchronously",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "File path",
+            optional: false,
+        }],
+        returns: "boolean",
+    },
+    LuaFunction {
+        name: "remove_dir",
+        module: Some("async"),
+        description: "Remove directory recursively asynchronously",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "Directory path",
+            optional: false,
+        }],
+        returns: "boolean",
+    },
+    LuaFunction {
+        name: "exists",
+        module: Some("async"),
+        description: "Check if file/directory exists asynchronously",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "Path to check",
+            optional: false,
+        }],
+        returns: "boolean",
+    },
+    LuaFunction {
+        name: "metadata",
+        module: Some("async"),
+        description: "Get file metadata asynchronously",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "File path",
+            optional: false,
+        }],
+        returns: "FileMetadata",
+    },
 ];
 
 // ============================================================================
@@ -1451,28 +1801,30 @@ pub fn generate_emmylua() -> String {
 
     // Group functions by module
     let mut global_fns: Vec<&LuaFunction> = Vec::new();
-    let mut async_fns: Vec<&LuaFunction> = Vec::new();
+    let mut coro_fns: Vec<&LuaFunction> = Vec::new();
     let mut parallel_fns: Vec<&LuaFunction> = Vec::new();
+    let mut async_fns: Vec<&LuaFunction> = Vec::new();
 
     for func in LUA_FUNCTIONS {
         match func.module {
             None => global_fns.push(func),
-            Some("async") => async_fns.push(func),
+            Some("coro") => coro_fns.push(func),
             Some("parallel") => parallel_fns.push(func),
+            Some("async") => async_fns.push(func),
             _ => global_fns.push(func),
         }
     }
 
-    // Generate async submodule class
+    // Generate coro submodule class
     output.push_str(
         "-- =============================================================================\n",
     );
-    output.push_str("-- ASYNC SUBMODULE\n");
+    output.push_str("-- CORO SUBMODULE\n");
     output.push_str(
         "-- =============================================================================\n\n",
     );
-    output.push_str("---@class RsAsyncModule\n");
-    for func in &async_fns {
+    output.push_str("---@class RsCoroModule\n");
+    for func in &coro_fns {
         let params = func
             .params
             .iter()
@@ -1515,6 +1867,32 @@ pub fn generate_emmylua() -> String {
     }
     output.push('\n');
 
+    // Generate async submodule class
+    output.push_str(
+        "-- =============================================================================\n",
+    );
+    output.push_str("-- ASYNC SUBMODULE (tokio-backed)\n");
+    output.push_str(
+        "-- =============================================================================\n\n",
+    );
+    output.push_str("---@class RsAsyncModule\n");
+    for func in &async_fns {
+        let params = func
+            .params
+            .iter()
+            .map(|p| {
+                let opt = if p.optional { "?" } else { "" };
+                format!("{}{}: {}", p.name, opt, p.typ)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!(
+            "---@field {} fun({}): {} {}\n",
+            func.name, params, func.returns, func.description
+        ));
+    }
+    output.push('\n');
+
     // Generate main rs module class
     output.push_str(
         "-- =============================================================================\n",
@@ -1527,8 +1905,9 @@ pub fn generate_emmylua() -> String {
     output.push_str("---@field _VERSION string Module version\n");
     output.push_str("---@field _SANDBOX boolean Whether sandbox mode is enabled\n");
     output.push_str("---@field _PROJECT_ROOT string Project root directory\n");
-    output.push_str("---@field async RsAsyncModule Async/coroutine helpers\n");
+    output.push_str("---@field coro RsCoroModule Coroutine helpers\n");
     output.push_str("---@field parallel RsParallelModule Parallel processing functions\n");
+    output.push_str("---@field async RsAsyncModule Async I/O functions (tokio-backed)\n");
 
     // Add all global functions as fields
     for func in &global_fns {
@@ -1582,11 +1961,11 @@ pub fn generate_emmylua() -> String {
         output.push_str(&format!("function rs.{}({}) end\n\n", func.name, params));
     }
 
-    // Async submodule stubs
-    output.push_str("-- Async submodule\n");
-    output.push_str("rs.async = {}\n\n");
+    // Coro submodule stubs
+    output.push_str("-- Coro submodule\n");
+    output.push_str("rs.coro = {}\n\n");
 
-    for func in &async_fns {
+    for func in &coro_fns {
         output.push_str(&format!("---{}\n", func.description));
         for param in func.params {
             let opt = if param.optional { "?" } else { "" };
@@ -1604,7 +1983,7 @@ pub fn generate_emmylua() -> String {
             .collect::<Vec<_>>()
             .join(", ");
         output.push_str(&format!(
-            "function rs.async.{}({}) end\n\n",
+            "function rs.coro.{}({}) end\n\n",
             func.name, params
         ));
     }
@@ -1636,6 +2015,33 @@ pub fn generate_emmylua() -> String {
         ));
     }
 
+    // Async submodule stubs
+    output.push_str("-- Async submodule (tokio-backed)\n");
+    output.push_str("rs.async = {}\n\n");
+
+    for func in &async_fns {
+        output.push_str(&format!("---{}\n", func.description));
+        for param in func.params {
+            let opt = if param.optional { "?" } else { "" };
+            output.push_str(&format!(
+                "---@param {}{} {} {}\n",
+                param.name, opt, param.typ, param.description
+            ));
+        }
+        output.push_str(&format!("---@return {}\n", func.returns));
+
+        let params = func
+            .params
+            .iter()
+            .map(|p| p.name.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!(
+            "function rs.async.{}({}) end\n\n",
+            func.name, params
+        ));
+    }
+
     output.push_str("return rs\n");
 
     output
@@ -1663,8 +2069,9 @@ pub fn generate_markdown() -> String {
     output.push_str("- [Git](#git)\n");
     output.push_str("- [Content Processing](#content-processing)\n");
     output.push_str("- [Image Processing](#image-processing)\n");
-    output.push_str("- [Async Module](#async-module)\n");
-    output.push_str("- [Parallel Module](#parallel-module)\n\n");
+    output.push_str("- [Coro Module](#coro-module)\n");
+    output.push_str("- [Parallel Module](#parallel-module)\n");
+    output.push_str("- [Async Module](#async-module)\n\n");
 
     // Types section
     output.push_str("## Types\n\n");
@@ -1781,11 +2188,11 @@ pub fn generate_markdown() -> String {
         }
     }
 
-    // Async module
-    output.push_str("## Async Module\n\n");
-    output.push_str("Coroutine-based concurrency helpers.\n\n");
-    for func in LUA_FUNCTIONS.iter().filter(|f| f.module == Some("async")) {
-        output.push_str(&format!("### `rs.async.{}()`\n\n", func.name));
+    // Coro module
+    output.push_str("## Coro Module\n\n");
+    output.push_str("Coroutine-based cooperative multitasking helpers.\n\n");
+    for func in LUA_FUNCTIONS.iter().filter(|f| f.module == Some("coro")) {
+        output.push_str(&format!("### `rs.coro.{}()`\n\n", func.name));
         output.push_str(&format!("{}\n\n", func.description));
 
         if !func.params.is_empty() {
@@ -1811,6 +2218,28 @@ pub fn generate_markdown() -> String {
         .filter(|f| f.module == Some("parallel"))
     {
         output.push_str(&format!("### `rs.parallel.{}()`\n\n", func.name));
+        output.push_str(&format!("{}\n\n", func.description));
+
+        if !func.params.is_empty() {
+            output.push_str("**Parameters:**\n\n");
+            for param in func.params {
+                let opt = if param.optional { " (optional)" } else { "" };
+                output.push_str(&format!(
+                    "- `{}`: `{}`{} - {}\n",
+                    param.name, param.typ, opt, param.description
+                ));
+            }
+            output.push('\n');
+        }
+
+        output.push_str(&format!("**Returns:** `{}`\n\n", func.returns));
+    }
+
+    // Async module
+    output.push_str("## Async Module\n\n");
+    output.push_str("Async I/O operations backed by Tokio.\n\n");
+    for func in LUA_FUNCTIONS.iter().filter(|f| f.module == Some("async")) {
+        output.push_str(&format!("### `rs.async.{}()`\n\n", func.name));
         output.push_str(&format!("{}\n\n", func.description));
 
         if !func.params.is_empty() {

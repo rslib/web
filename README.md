@@ -8,6 +8,7 @@ A fast, opinionated static site generator built in Rust with support for:
 - Link graph with backlinks and visualization (Obsidian-style)
 - RSS feed generation with section filtering
 - Parallel processing for fast builds
+- Live reload with automatic browser refresh during watch mode
 
 ## Installation
 
@@ -30,22 +31,31 @@ rs-web build
 # Build to custom output directory
 rs-web build --output public
 
-# Watch for changes and rebuild incrementally
+# Watch for changes and rebuild incrementally with live reload
 rs-web build --watch
+
+# Watch mode with custom port
+rs-web build --watch --port 8080
 ```
 
 ## Incremental Builds
 
 When using `--watch`, rs-web tracks file dependencies automatically and only rebuilds what's necessary:
 
-- **Dependency tracking**: All file reads/writes in Lua are tracked automatically
+- **Dependency tracking**: All file reads/writes in Lua and Tera are tracked automatically
 - **Smart rebuilds**: Only rebuilds when tracked dependencies change
+- **Stale page cleanup**: Pages that no longer exist (e.g., renamed tags) are automatically deleted
+- **Change output**: Shows which files changed during each rebuild
+- **Live reload**: Browser automatically refreshes when content changes
 - **Memoization**: Transform functions like `render_markdown` cache results
 - **Cache persistence**: Dependencies are cached in `.rs-web-cache/deps.bin`
 
 ```bash
-# Watch mode with smart incremental builds
+# Watch mode with smart incremental builds and live reload
 rs-web build --watch
+
+# Watch mode with custom port
+rs-web build --watch --port 8080
 
 # Clean the cache to force a full rebuild
 rm -rf .rs-web-cache
