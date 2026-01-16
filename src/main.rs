@@ -77,6 +77,19 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Create a new project
+    New {
+        /// Project name (creates directory with this name)
+        name: String,
+
+        /// Parent directory where project will be created (default: current directory)
+        #[arg(short = 'd', long = "dir")]
+        directory: Option<PathBuf>,
+
+        /// Initialize in existing directory (will not overwrite existing files)
+        #[arg(short, long)]
+        force: bool,
+    },
     /// Start development server with live reload
     Serve {
         /// Project directory containing config.lua
@@ -228,6 +241,173 @@ async fn main() -> Result<()> {
                     println!("Generated {}", path.display());
                 }
             }
+        }
+        Commands::New {
+            name,
+            directory,
+            force,
+        } => {
+            // Determine parent directory
+            let parent_dir = directory.unwrap_or_else(|| PathBuf::from("."));
+            let project_dir = parent_dir.join(&name);
+
+            // Check if directory already exists
+            if project_dir.exists() && !force {
+                anyhow::bail!(
+                    "Directory '{}' already exists. Use --force to initialize anyway.",
+                    project_dir.display()
+                );
+            }
+
+            // Create project directory
+            std::fs::create_dir_all(&project_dir)?;
+            if !project_dir.exists() || !force {
+                log::info!("Created project directory: {}", project_dir.display());
+            } else {
+                log::info!(
+                    "Initializing in existing directory: {}",
+                    project_dir.display()
+                );
+            }
+
+            // Helper to write file only if it doesn't exist (when using --force)
+            let write_if_not_exists = |path: &Path, content: &str| -> Result<bool> {
+                if path.exists() {
+                    log::info!("Skipped {} (already exists)", path.display());
+                    Ok(false)
+                } else {
+                    std::fs::write(path, content)?;
+                    Ok(true)
+                }
+            };
+
+            // Create static/ directory
+            let static_dir = project_dir.join("static");
+            if !static_dir.exists() {
+                std::fs::create_dir_all(&static_dir)?;
+                log::info!("Created {}", static_dir.display());
+            }
+
+            // Create templates/ directory with base template
+            let templates_dir = project_dir.join("templates");
+            if !templates_dir.exists() {
+                std::fs::create_dir_all(&templates_dir)?;
+                log::info!("Created {}", templates_dir.display());
+            }
+
+            let base_template = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ site.title }}{% endblock %}</title>
+</head>
+<body>
+    {% block content %}{% endblock %}
+</body>
+</html>
+"#;
+            if write_if_not_exists(&templates_dir.join("base.html"), base_template)? {
+                log::info!("Created {}", templates_dir.join("base.html").display());
+            }
+
+            let page_template = r#"{% extends "base.html" %}
+
+{% block title %}{{ page.title }} | {{ site.title }}{% endblock %}
+
+{% block content %}
+<article>
+    <h1>{{ page.title }}</h1>
+    {{ content | safe }}
+</article>
+{% endblock %}
+"#;
+            if write_if_not_exists(&templates_dir.join("page.html"), page_template)? {
+                log::info!("Created {}", templates_dir.join("page.html").display());
+            }
+
+            // Create .types/ directory and generate Lua types (always regenerate)
+            let types_dir = project_dir.join(".types");
+            std::fs::create_dir_all(&types_dir)?;
+            let lua_types = rs_web::lua::generate_emmylua();
+            let lua_types_path = types_dir.join("rs-web.lua");
+            std::fs::write(&lua_types_path, &lua_types)?;
+            log::info!("Created {}", lua_types_path.display());
+
+            // Create site/ directory with index.md
+            let site_dir = project_dir.join("site");
+            if !site_dir.exists() {
+                std::fs::create_dir_all(&site_dir)?;
+                log::info!("Created {}", site_dir.display());
+            }
+
+            let index_md = r#"---
+title: Home
+---
+
+Welcome to your new site!
+"#;
+            if write_if_not_exists(&site_dir.join("index.md"), index_md)? {
+                log::info!("Created {}", site_dir.join("index.md").display());
+            }
+
+            // Create config.lua with require statement
+            let config_content = format!(
+                r#"local rs = require("rs-web")
+
+return {{
+  site = {{
+    title = "{}",
+    description = "A new rs-web site",
+    base_url = "http://localhost:3000",
+    author = "Author",
+  }},
+
+  pages = function(ctx)
+    local index = rs.read_frontmatter("site/index.md")
+
+    return {{
+      {{
+        path = "/",
+        template = "page.html",
+        title = index.title,
+        content = rs.render_markdown(index.content),
+      }},
+    }}
+  end,
+}}
+"#,
+                name
+            );
+            let config_path = project_dir.join("config.lua");
+            if write_if_not_exists(&config_path, &config_content)? {
+                log::info!("Created {}", config_path.display());
+            }
+
+            // Create .luarc.json for LSP
+            let luarc_content = r#"{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "workspace.library": [".types"]
+}
+"#;
+            let luarc_path = project_dir.join(".luarc.json");
+            if write_if_not_exists(&luarc_path, luarc_content)? {
+                log::info!("Created {}", luarc_path.display());
+            }
+
+            // Create .gitignore
+            let gitignore_content = r#"# Build output
+dist/
+
+# Generated types
+.types/
+"#;
+            let gitignore_path = project_dir.join(".gitignore");
+            if write_if_not_exists(&gitignore_path, gitignore_content)? {
+                log::info!("Created {}", gitignore_path.display());
+            }
+
+            println!("Created project '{}' at {}", name, project_dir.display());
         }
         Commands::Serve {
             directory,
