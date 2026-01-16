@@ -1,6 +1,6 @@
 [package]
 name = "rs-web"
-version = "0.2.0"
+version = "0.2.2"
 edition = "2024"
 description = "A fast, Lua-driven static site generator with encryption support"
 authors = ["Ray Andrew Sinurat"]
