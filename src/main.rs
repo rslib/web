@@ -441,14 +441,14 @@ dist/
                 project_dir.join(&config.build.output_dir)
             };
 
+            // Create builder
+            let mut builder = Builder::new(config, output_dir.clone(), project_dir.clone());
+
             // Build if needed
             if !no_build {
                 let start = Instant::now();
-                let mut builder = Builder::new(config, output_dir.clone(), project_dir.clone());
                 builder.build()?;
                 println!("Built in {:?}", start.elapsed());
-                // Reload config for server
-                config = Config::load(&project_dir)?;
             }
 
             // Start the server
@@ -462,7 +462,7 @@ dist/
 
             // Watch mode with live reload
             if watch {
-                run_serve_watch_loop(config, &project_dir, &output_dir, reload_tx)?;
+                run_serve_watch_loop(builder, &project_dir, &output_dir, reload_tx)?;
             } else {
                 // Just keep running
                 println!("Press Ctrl+C to stop.\n");
@@ -512,15 +512,14 @@ fn run_watch_loop(mut builder: Builder, project_dir: &Path, output_dir: &Path) -
 
 /// Run the watch loop with live reload for serve command
 fn run_serve_watch_loop(
-    config: Config,
+    mut builder: Builder,
     project_dir: &Path,
     output_dir: &Path,
     reload_tx: tokio::sync::broadcast::Sender<ReloadMessage>,
 ) -> Result<()> {
     println!("Watching for changes. Press Ctrl+C to stop.\n");
 
-    let watcher = FileWatcher::new(project_dir, &config, output_dir)?;
-    let mut builder = Builder::new(config, output_dir.to_path_buf(), project_dir.to_path_buf());
+    let watcher = FileWatcher::new(project_dir, builder.config(), output_dir)?;
 
     loop {
         let changes = watcher.wait_for_changes()?;
@@ -535,7 +534,7 @@ fn run_serve_watch_loop(
         // Check if only CSS changed for hot reload
         let css_only = changes.rebuild_css
             && !changes.full_rebuild
-            && !changes.reload_templates
+            && !changes.has_template_changes()
             && !changes.rebuild_home
             && changes.content_files.is_empty()
             && changes.static_files.is_empty()

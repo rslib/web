@@ -2,7 +2,7 @@
 //!
 //! Functions: image_dimensions, image_resize, image_convert, image_optimize
 
-use super::tracker::SharedTracker;
+use crate::tracker::SharedTracker;
 use mlua::{Lua, Result, Table, Value};
 use std::path::{Path, PathBuf};
 

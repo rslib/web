@@ -257,4 +257,5 @@ pub mod markdown;
 pub mod server;
 pub mod templates;
 pub mod text;
+pub mod tracker;
 pub mod watch;

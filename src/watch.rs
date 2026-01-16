@@ -18,8 +18,8 @@ pub enum ChangeType {
     Config,
     /// Content file changed - requires full rebuild (Lua controls content)
     Content(PathBuf),
-    /// Template file changed - re-render all posts
-    Template,
+    /// Template file changed - re-render affected pages
+    Template(PathBuf),
     /// CSS/style file changed - only rebuild CSS
     Css,
     /// Static file changed (non-image) - copy that file
@@ -33,9 +33,9 @@ pub enum ChangeType {
 pub struct ChangeSet {
     pub full_rebuild: bool,
     pub rebuild_css: bool,
-    pub reload_templates: bool,
     pub rebuild_home: bool,
     pub content_files: HashSet<PathBuf>,
+    pub template_files: HashSet<PathBuf>,
     pub static_files: HashSet<PathBuf>,
     pub image_files: HashSet<PathBuf>,
 }
@@ -44,27 +44,37 @@ impl ChangeSet {
     pub fn is_empty(&self) -> bool {
         !self.full_rebuild
             && !self.rebuild_css
-            && !self.reload_templates
             && !self.rebuild_home
             && self.content_files.is_empty()
+            && self.template_files.is_empty()
             && self.static_files.is_empty()
             && self.image_files.is_empty()
+    }
+
+    /// Check if any templates changed
+    pub fn has_template_changes(&self) -> bool {
+        !self.template_files.is_empty()
     }
 
     fn add(&mut self, change: ChangeType) {
         match change {
             ChangeType::Config => self.full_rebuild = true,
             ChangeType::Content(path) => {
-                // Any content change triggers full rebuild
-                self.content_files.insert(path);
+                let canonical = path.canonicalize().unwrap_or(path);
+                self.content_files.insert(canonical);
             }
-            ChangeType::Template => self.reload_templates = true,
+            ChangeType::Template(path) => {
+                let canonical = path.canonicalize().unwrap_or(path);
+                self.template_files.insert(canonical);
+            }
             ChangeType::Css => self.rebuild_css = true,
             ChangeType::StaticFile(path) => {
-                self.static_files.insert(path);
+                let canonical = path.canonicalize().unwrap_or(path);
+                self.static_files.insert(canonical);
             }
             ChangeType::Image(path) => {
-                self.image_files.insert(path);
+                let canonical = path.canonicalize().unwrap_or(path);
+                self.image_files.insert(canonical);
             }
         }
     }
@@ -73,9 +83,9 @@ impl ChangeSet {
         // If full rebuild, clear incremental changes
         if self.full_rebuild {
             self.rebuild_css = false;
-            self.reload_templates = false;
             self.rebuild_home = false;
             self.content_files.clear();
+            self.template_files.clear();
             self.static_files.clear();
             self.image_files.clear();
         }
@@ -244,7 +254,7 @@ impl FileWatcher {
         if path.starts_with(&self.templates_dir) {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             if ext == "html" || ext == "htm" {
-                return Some(ChangeType::Template);
+                return Some(ChangeType::Template(path.to_path_buf()));
             }
             return None;
         }
@@ -293,8 +303,8 @@ pub fn format_changes(changes: &ChangeSet) -> String {
         return "config changed (full rebuild)".to_string();
     }
 
-    if changes.reload_templates {
-        parts.push("templates".to_string());
+    if !changes.template_files.is_empty() {
+        parts.push(format!("{} templates", changes.template_files.len()));
     }
 
     if changes.rebuild_css {

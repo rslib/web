@@ -25,13 +25,12 @@ mod markdown_context;
 mod parallel;
 mod search;
 mod text;
-pub mod tracker;
 mod types;
 
 pub use helpers::{is_path_within_root, parse_frontmatter_content, resolve_path};
-pub use tracker::{BuildTracker, CachedDeps, SharedTracker};
 pub use types::{LuaClass, LuaField, LuaFunction, LuaParam, generate_emmylua, generate_markdown};
 
+use crate::tracker::SharedTracker;
 use mlua::{Lua, Result, Table};
 use std::path::Path;
 

@@ -5,7 +5,7 @@
 //!            parallel.filter, parallel.reduce
 
 use super::helpers::{is_path_within_root, parse_frontmatter_content, resolve_path};
-use super::tracker::SharedTracker;
+use crate::tracker::SharedTracker;
 use mlua::{Function, Lua, LuaSerdeExt, Result, Table, Value};
 use rayon::prelude::*;
 use std::path::Path;

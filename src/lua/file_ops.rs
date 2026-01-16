@@ -4,7 +4,7 @@
 //!            file_exists, list_files, list_dirs, write_file, copy_file
 
 use super::helpers::{is_path_within_root, parse_frontmatter_content, resolve_path};
-use super::tracker::SharedTracker;
+use crate::tracker::SharedTracker;
 use mlua::{Lua, LuaSerdeExt, Result, Table, Value};
 use std::path::Path;
 

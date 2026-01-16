@@ -2,7 +2,7 @@
 //!
 //! Functions: build_css
 
-use super::tracker::SharedTracker;
+use crate::tracker::SharedTracker;
 use mlua::{Lua, Result, Table, Value};
 use std::fs;
 use std::path::{Path, PathBuf};

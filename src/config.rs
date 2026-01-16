@@ -9,7 +9,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::lua::{BuildTracker, SharedTracker};
+use crate::tracker::{BuildTracker, SharedTracker};
 
 /// Configuration data structure (deserializable from Lua)
 #[derive(Debug, Clone)]

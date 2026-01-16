@@ -2,23 +2,151 @@
 
 use anyhow::{Context, Result};
 use log::{debug, trace};
+use regex::Regex;
 use serde::Serialize;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use tera::Tera;
 
 use crate::config::{Config, PageDef};
 use crate::data::register_data_functions;
 use crate::git::register_git_functions;
-use crate::lua::SharedTracker;
+use crate::tracker::SharedTracker;
+
+// Regex patterns for parsing template directives
+static EXTENDS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\{%\s*extends\s+["']([^"']+)["']\s*%\}"#).unwrap());
+static INCLUDE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\{%\s*include\s+["']([^"']+)["']\s*"#).unwrap());
+
+/// Template dependency graph
+#[derive(Debug, Clone, Default)]
+pub struct TemplateDeps {
+    /// Template name → file path
+    pub template_files: HashMap<String, PathBuf>,
+    /// Template name → templates it depends on (extends/includes)
+    pub dependencies: HashMap<String, HashSet<String>>,
+    /// Template name → templates that depend on it (reverse lookup)
+    pub dependents: HashMap<String, HashSet<String>>,
+}
+
+impl TemplateDeps {
+    /// Build template dependencies by scanning template files
+    pub fn build(template_dir: &Path) -> Result<Self> {
+        let mut deps = Self::default();
+
+        // Find all template files
+        let pattern = format!("{}/**/*", template_dir.to_string_lossy());
+        for entry in glob::glob(&pattern)? {
+            let path = entry?;
+            if path.is_file() {
+                // Get template name relative to template_dir
+                if let Ok(rel_path) = path.strip_prefix(template_dir) {
+                    let template_name = rel_path.to_string_lossy().to_string();
+                    deps.template_files
+                        .insert(template_name.clone(), path.clone());
+
+                    // Parse template for dependencies
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        let mut template_deps = HashSet::new();
+
+                        // Find {% extends "..." %}
+                        for cap in EXTENDS_RE.captures_iter(&content) {
+                            if let Some(m) = cap.get(1) {
+                                template_deps.insert(m.as_str().to_string());
+                            }
+                        }
+
+                        // Find {% include "..." %}
+                        for cap in INCLUDE_RE.captures_iter(&content) {
+                            if let Some(m) = cap.get(1) {
+                                template_deps.insert(m.as_str().to_string());
+                            }
+                        }
+
+                        deps.dependencies.insert(template_name, template_deps);
+                    }
+                }
+            }
+        }
+
+        // Build reverse lookup (dependents)
+        for (template, template_deps) in &deps.dependencies {
+            for dep in template_deps {
+                deps.dependents
+                    .entry(dep.clone())
+                    .or_default()
+                    .insert(template.clone());
+            }
+        }
+
+        debug!(
+            "Built template dependency graph: {} templates",
+            deps.template_files.len()
+        );
+        trace!("Template dependencies: {:?}", deps.dependencies);
+
+        Ok(deps)
+    }
+
+    /// Get all templates affected by a change to the given template (transitive)
+    pub fn get_affected_templates(&self, changed_template: &str) -> HashSet<String> {
+        let mut affected = HashSet::new();
+        let mut to_process = vec![changed_template.to_string()];
+
+        while let Some(template) = to_process.pop() {
+            if affected.insert(template.clone()) {
+                // Add all templates that depend on this one
+                if let Some(dependents) = self.dependents.get(&template) {
+                    for dep in dependents {
+                        if !affected.contains(dep) {
+                            to_process.push(dep.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        affected
+    }
+
+    /// Get the file path for a template name
+    pub fn get_file_path(&self, template_name: &str) -> Option<&PathBuf> {
+        self.template_files.get(template_name)
+    }
+
+    /// Find template name from file path
+    pub fn find_template_by_path(&self, path: &Path) -> Option<&String> {
+        self.template_files
+            .iter()
+            .find(|(_, p)| *p == path)
+            .map(|(name, _)| name)
+    }
+}
 
 /// Template engine wrapper
 pub struct Templates {
     tera: Tera,
+    deps: TemplateDeps,
 }
 
 impl Templates {
     pub fn new(template_dir: &Path, tracker: Option<SharedTracker>) -> Result<Self> {
         debug!("Loading templates from {:?}", template_dir);
+
+        // Build template dependency graph first
+        let deps = TemplateDeps::build(template_dir)?;
+
+        // Record template files in tracker
+        if let Some(ref tracker) = tracker {
+            for path in deps.template_files.values() {
+                if let Ok(content) = std::fs::read(path) {
+                    tracker.record_read(path.clone(), &content);
+                }
+            }
+        }
+
         let template_dir_str = template_dir.to_string_lossy();
         let pattern = format!("{}/**/*", template_dir_str);
         let mut tera = Tera::new(&pattern)
@@ -34,7 +162,12 @@ impl Templates {
             tera.get_template_names().collect::<Vec<_>>()
         );
 
-        Ok(Self { tera })
+        Ok(Self { tera, deps })
+    }
+
+    /// Get template dependency graph
+    pub fn deps(&self) -> &TemplateDeps {
+        &self.deps
     }
 
     /// Render a page

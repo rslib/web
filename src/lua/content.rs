@@ -6,7 +6,7 @@
 use super::markdown_context::{
     MarkdownContext, lua_table_to_event, set_tag_end_info, set_tag_info,
 };
-use super::tracker::{SharedTracker, hash_str};
+use crate::tracker::{SharedTracker, hash_str};
 use mlua::{Function, Lua, Result, Table, Value};
 
 /// Register content-related Lua functions on the module table

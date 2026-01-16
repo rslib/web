@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use crate::assets::copy_static_files;
 use crate::config::{Config, PageDef};
-use crate::lua::{BuildTracker, CachedDeps, SharedTracker};
 use crate::markdown::{Pipeline, TransformContext};
 use crate::templates::Templates;
+use crate::tracker::{BuildTracker, CachedDeps, SharedTracker};
 
 /// Cache file name
 const CACHE_FILE: &str = ".rs-web-cache/deps.bin";
@@ -383,10 +383,12 @@ impl Builder {
             );
         }
 
-        // Template-only changes - re-render with cached data (skip Lua calls)
-        if changes.reload_templates {
-            println!("  Changed: templates");
-            return self.rebuild_templates_only();
+        // Template changes - re-render affected pages with cached data (skip Lua calls)
+        if changes.has_template_changes() {
+            for path in &changes.template_files {
+                println!("  Changed: {}", path.display());
+            }
+            return self.rebuild_templates_only(&changes.template_files);
         }
 
         // Handle CSS-only changes
@@ -463,30 +465,75 @@ impl Builder {
     }
 
     /// Rebuild only by re-rendering templates with cached data
-    fn rebuild_templates_only(&self) -> Result<()> {
-        let (global_data, pages) = match (&self.cached_global_data, &self.cached_pages) {
-            (Some(data), Some(pages)) => (data, pages),
+    fn rebuild_templates_only(
+        &mut self,
+        changed_template_files: &std::collections::HashSet<PathBuf>,
+    ) -> Result<()> {
+        let (global_data, all_pages) = match (&self.cached_global_data, &self.cached_pages) {
+            (Some(data), Some(pages)) => (data.clone(), pages.clone()),
             _ => {
-                // No cache available, need full rebuild
-                return Err(anyhow::anyhow!(
-                    "No cached data available for template rebuild"
-                ));
+                // No cache available, do a full build to populate it
+                log::info!("No cached data available, performing full build");
+                return self.build();
             }
         };
 
-        debug!("Template-only rebuild with {} cached pages", pages.len());
+        // Reload templates and get dependency graph
+        let template_dir = self.resolve_path(&self.config.paths.templates);
+        let templates = Templates::new(&template_dir, Some(self.tracker.clone()))?;
+        let deps = templates.deps();
 
-        // Reload templates
-        let templates = Templates::new(
-            &self.resolve_path(&self.config.paths.templates),
-            Some(self.tracker.clone()),
-        )?;
+        // Find all affected templates (transitively)
+        let mut affected_templates = std::collections::HashSet::new();
+        for changed_path in changed_template_files {
+            // Find template name from path
+            if let Some(template_name) = deps.find_template_by_path(changed_path) {
+                let transitive = deps.get_affected_templates(template_name);
+                affected_templates.extend(transitive);
+            } else if let Ok(rel_path) = changed_path.strip_prefix(&template_dir) {
+                // Try relative path as template name
+                let template_name = rel_path.to_string_lossy().to_string();
+                let transitive = deps.get_affected_templates(&template_name);
+                affected_templates.extend(transitive);
+            }
+        }
+
+        debug!("Affected templates: {:?}", affected_templates);
+
+        // Filter pages to only those using affected templates
+        let pages_to_rebuild: Vec<_> = all_pages
+            .iter()
+            .filter(|page| {
+                if let Some(ref template) = page.template {
+                    affected_templates.contains(template)
+                } else {
+                    false
+                }
+            })
+            .cloned()
+            .collect();
+
+        if pages_to_rebuild.is_empty() {
+            println!("No pages affected by template changes");
+            return Ok(());
+        }
+
+        debug!(
+            "Template rebuild: {} of {} pages affected",
+            pages_to_rebuild.len(),
+            all_pages.len()
+        );
+
         let pipeline = Pipeline::from_config(&self.config);
 
-        // Re-render all pages with cached data
-        self.render_pages(pages, global_data, &templates, &pipeline)?;
+        // Re-render only affected pages with cached data
+        self.render_pages(&pages_to_rebuild, &global_data, &templates, &pipeline)?;
 
-        println!("Re-rendered {} pages (templates only)", pages.len());
+        println!(
+            "Re-rendered {} of {} pages (templates changed)",
+            pages_to_rebuild.len(),
+            all_pages.len()
+        );
         Ok(())
     }
 

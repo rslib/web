@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tera::{Function, Value};
 
-use crate::lua::SharedTracker;
 use crate::text::html_to_text;
+use crate::tracker::SharedTracker;
 
 /// Expand ~ to home directory
 fn expand_tilde(path: &str) -> PathBuf {
