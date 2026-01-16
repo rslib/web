@@ -351,6 +351,27 @@ pub static LUA_CLASSES: &[LuaClass] = &[
             },
         ],
     },
+    LuaClass {
+        name: "DateTable",
+        description: "Date as table with year, month, day fields",
+        fields: &[
+            LuaField {
+                name: "year",
+                typ: "number",
+                description: "Year (e.g., 2024)",
+            },
+            LuaField {
+                name: "month",
+                typ: "number",
+                description: "Month (1-12)",
+            },
+            LuaField {
+                name: "day",
+                typ: "number",
+                description: "Day of month (1-31)",
+            },
+        ],
+    },
 ];
 
 // ============================================================================
@@ -589,6 +610,134 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         ],
         returns: "U[]",
     },
+    LuaFunction {
+        name: "find",
+        module: None,
+        description: "Find first item where predicate returns true",
+        params: &[
+            LuaParam {
+                name: "items",
+                typ: "T[]",
+                description: "Items to search",
+                optional: false,
+            },
+            LuaParam {
+                name: "fn",
+                typ: "fun(item: T): boolean",
+                description: "Predicate function",
+                optional: false,
+            },
+        ],
+        returns: "T|nil",
+    },
+    LuaFunction {
+        name: "group_by",
+        module: None,
+        description: "Group items by key returned by key function",
+        params: &[
+            LuaParam {
+                name: "items",
+                typ: "T[]",
+                description: "Items to group",
+                optional: false,
+            },
+            LuaParam {
+                name: "fn",
+                typ: "fun(item: T): string",
+                description: "Key function",
+                optional: false,
+            },
+        ],
+        returns: "table<string, T[]>",
+    },
+    LuaFunction {
+        name: "unique",
+        module: None,
+        description: "Remove duplicates from array",
+        params: &[LuaParam {
+            name: "items",
+            typ: "T[]",
+            description: "Items to deduplicate",
+            optional: false,
+        }],
+        returns: "T[]",
+    },
+    LuaFunction {
+        name: "reverse",
+        module: None,
+        description: "Reverse array order",
+        params: &[LuaParam {
+            name: "items",
+            typ: "T[]",
+            description: "Items to reverse",
+            optional: false,
+        }],
+        returns: "T[]",
+    },
+    LuaFunction {
+        name: "take",
+        module: None,
+        description: "Take first n items from array",
+        params: &[
+            LuaParam {
+                name: "items",
+                typ: "T[]",
+                description: "Items to take from",
+                optional: false,
+            },
+            LuaParam {
+                name: "n",
+                typ: "number",
+                description: "Number of items to take",
+                optional: false,
+            },
+        ],
+        returns: "T[]",
+    },
+    LuaFunction {
+        name: "skip",
+        module: None,
+        description: "Skip first n items from array",
+        params: &[
+            LuaParam {
+                name: "items",
+                typ: "T[]",
+                description: "Items to skip from",
+                optional: false,
+            },
+            LuaParam {
+                name: "n",
+                typ: "number",
+                description: "Number of items to skip",
+                optional: false,
+            },
+        ],
+        returns: "T[]",
+    },
+    LuaFunction {
+        name: "keys",
+        module: None,
+        description: "Get all keys from a table",
+        params: &[LuaParam {
+            name: "table",
+            typ: "table<K, V>",
+            description: "Table to get keys from",
+            optional: false,
+        }],
+        returns: "K[]",
+    },
+    LuaFunction {
+        name: "values",
+        module: None,
+        description: "Get all values from a table",
+        params: &[LuaParam {
+            name: "table",
+            typ: "table<K, V>",
+            description: "Table to get values from",
+            optional: false,
+        }],
+        returns: "V[]",
+    },
     // TEXT
     LuaFunction {
         name: "slugify",
@@ -633,6 +782,173 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "number",
+    },
+    LuaFunction {
+        name: "truncate",
+        module: None,
+        description: "Truncate text with optional suffix",
+        params: &[
+            LuaParam {
+                name: "text",
+                typ: "string",
+                description: "Text to truncate",
+                optional: false,
+            },
+            LuaParam {
+                name: "len",
+                typ: "number",
+                description: "Maximum length",
+                optional: false,
+            },
+            LuaParam {
+                name: "suffix",
+                typ: "string",
+                description: "Suffix to append (default: '...')",
+                optional: true,
+            },
+        ],
+        returns: "string",
+    },
+    LuaFunction {
+        name: "strip_tags",
+        module: None,
+        description: "Remove HTML tags from string",
+        params: &[LuaParam {
+            name: "html",
+            typ: "string",
+            description: "HTML content",
+            optional: false,
+        }],
+        returns: "string",
+    },
+    LuaFunction {
+        name: "format_date",
+        module: None,
+        description: "Format a date string",
+        params: &[
+            LuaParam {
+                name: "date",
+                typ: "string|DateTable",
+                description: "Date string (YYYY-MM-DD) or table {year, month, day}",
+                optional: false,
+            },
+            LuaParam {
+                name: "format",
+                typ: "string",
+                description: "Output format (chrono strftime)",
+                optional: false,
+            },
+        ],
+        returns: "string|nil",
+    },
+    LuaFunction {
+        name: "parse_date",
+        module: None,
+        description: "Parse date string to table",
+        params: &[LuaParam {
+            name: "date_str",
+            typ: "string",
+            description: "Date string to parse",
+            optional: false,
+        }],
+        returns: "DateTable|nil",
+    },
+    LuaFunction {
+        name: "hash",
+        module: None,
+        description: "Hash content using xxHash64",
+        params: &[LuaParam {
+            name: "content",
+            typ: "string",
+            description: "Content to hash",
+            optional: false,
+        }],
+        returns: "string",
+    },
+    LuaFunction {
+        name: "hash_file",
+        module: None,
+        description: "Hash file contents using xxHash64",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "Path to file",
+            optional: false,
+        }],
+        returns: "string|nil",
+    },
+    LuaFunction {
+        name: "url_encode",
+        module: None,
+        description: "URL encode a string",
+        params: &[LuaParam {
+            name: "text",
+            typ: "string",
+            description: "Text to encode",
+            optional: false,
+        }],
+        returns: "string",
+    },
+    LuaFunction {
+        name: "url_decode",
+        module: None,
+        description: "URL decode a string",
+        params: &[LuaParam {
+            name: "text",
+            typ: "string",
+            description: "Text to decode",
+            optional: false,
+        }],
+        returns: "string",
+    },
+    // PATH UTILITIES
+    LuaFunction {
+        name: "join_path",
+        module: None,
+        description: "Join path segments",
+        params: &[LuaParam {
+            name: "...",
+            typ: "string",
+            description: "Path segments to join",
+            optional: false,
+        }],
+        returns: "string",
+    },
+    LuaFunction {
+        name: "basename",
+        module: None,
+        description: "Get file name from path",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "File path",
+            optional: false,
+        }],
+        returns: "string",
+    },
+    LuaFunction {
+        name: "dirname",
+        module: None,
+        description: "Get directory from path",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "File path",
+            optional: false,
+        }],
+        returns: "string",
+    },
+    LuaFunction {
+        name: "extension",
+        module: None,
+        description: "Get file extension from path",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "File path",
+            optional: false,
+        }],
+        returns: "string",
     },
     // ENV
     LuaFunction {
@@ -1342,6 +1658,7 @@ pub fn generate_markdown() -> String {
     output.push_str("- [Search](#search)\n");
     output.push_str("- [Collections](#collections)\n");
     output.push_str("- [Text Processing](#text-processing)\n");
+    output.push_str("- [Path Utilities](#path-utilities)\n");
     output.push_str("- [Environment](#environment)\n");
     output.push_str("- [Git](#git)\n");
     output.push_str("- [Content Processing](#content-processing)\n");
@@ -1383,10 +1700,32 @@ pub fn generate_markdown() -> String {
             ],
         ),
         ("Search", vec!["glob", "scan"]),
-        ("Collections", vec!["filter", "sort", "map"]),
+        (
+            "Collections",
+            vec![
+                "filter", "sort", "map", "find", "group_by", "unique", "reverse", "take", "skip",
+                "keys", "values",
+            ],
+        ),
         (
             "Text Processing",
-            vec!["slugify", "word_count", "reading_time"],
+            vec![
+                "slugify",
+                "word_count",
+                "reading_time",
+                "truncate",
+                "strip_tags",
+                "format_date",
+                "parse_date",
+                "hash",
+                "hash_file",
+                "url_encode",
+                "url_decode",
+            ],
+        ),
+        (
+            "Path Utilities",
+            vec!["join_path", "basename", "dirname", "extension"],
         ),
         ("Environment", vec!["env", "print", "is_gitignored"]),
         ("Git", vec!["git_info"]),
