@@ -1,6 +1,4 @@
-//! Collection operation functions for Lua API
-//!
-//! Functions: filter, sort, map, find, group_by, unique, reverse, take, skip, keys, values
+//! Collection operations - filter, sort, map, find, group_by, etc.
 
 use mlua::{Function, Lua, Result, Table, Value};
 use std::collections::HashMap;

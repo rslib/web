@@ -16,12 +16,14 @@ use crate::config::Config;
 pub enum ChangeType {
     /// Config file changed - requires full rebuild
     Config,
-    /// Content file changed - requires full rebuild (Lua controls content)
+    /// Content file changed - requires data()/pages() rebuild
     Content(PathBuf),
     /// Template file changed - re-render affected pages
     Template(PathBuf),
-    /// CSS/style file changed - triggers before_build hook
+    /// CSS/style file changed - triggers before_build hook (CSS hot reload)
     Css,
+    /// Static asset changed (JS/images/fonts) - triggers before_build hook
+    Asset(PathBuf),
 }
 
 /// Aggregated changes from a batch of file events
@@ -31,6 +33,7 @@ pub struct ChangeSet {
     pub rebuild_css: bool,
     pub rebuild_home: bool,
     pub content_files: HashSet<PathBuf>,
+    pub asset_files: HashSet<PathBuf>,
     pub template_files: HashSet<PathBuf>,
 }
 
@@ -40,6 +43,7 @@ impl ChangeSet {
             && !self.rebuild_css
             && !self.rebuild_home
             && self.content_files.is_empty()
+            && self.asset_files.is_empty()
             && self.template_files.is_empty()
     }
 
@@ -48,18 +52,28 @@ impl ChangeSet {
         !self.template_files.is_empty()
     }
 
+    /// Check if any assets changed
+    pub fn has_asset_changes(&self) -> bool {
+        !self.asset_files.is_empty()
+    }
+
     fn add(&mut self, change: ChangeType) {
         match change {
             ChangeType::Config => self.full_rebuild = true,
             ChangeType::Content(path) => {
-                let canonical = path.canonicalize().unwrap_or(path);
-                self.content_files.insert(canonical);
+                // Path is already relative (project prefix stripped in classify_change)
+                self.content_files.insert(path);
             }
             ChangeType::Template(path) => {
+                // Template paths are absolute (from templates_dir)
                 let canonical = path.canonicalize().unwrap_or(path);
                 self.template_files.insert(canonical);
             }
             ChangeType::Css => self.rebuild_css = true,
+            ChangeType::Asset(path) => {
+                // Path is already relative (project prefix stripped in classify_change)
+                self.asset_files.insert(path);
+            }
         }
     }
 
@@ -69,6 +83,7 @@ impl ChangeSet {
             self.rebuild_css = false;
             self.rebuild_home = false;
             self.content_files.clear();
+            self.asset_files.clear();
             self.template_files.clear();
         }
     }
@@ -123,9 +138,9 @@ impl FileWatcher {
             .with_context(|| format!("Failed to watch project: {:?}", project_dir))?;
 
         debug!("File watcher initialized");
-        println!("Watching for changes...");
-        println!("  Project:   {:?}", project_dir);
-        println!("  Templates: {:?}", templates_dir);
+        rs_print!("Watching for changes...");
+        rs_print!("  Project:   {:?}", project_dir);
+        rs_print!("  Templates: {:?}", templates_dir);
 
         Ok(Self {
             project_dir,
@@ -226,12 +241,36 @@ impl FileWatcher {
         if path.starts_with(&self.project_dir) {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-            // CSS files trigger before_build hook
+            // CSS files trigger before_build hook (CSS hot reload)
             if ext == "css" {
                 return Some(ChangeType::Css);
             }
 
-            // Content files (md, html, json, lua) trigger rebuild
+            // Static assets trigger before_build hook
+            // Includes: JS/TS, images, fonts, etc.
+            if matches!(
+                ext,
+                "js" | "ts"
+                    | "mjs"
+                    | "mts"
+                    | "png"
+                    | "jpg"
+                    | "jpeg"
+                    | "gif"
+                    | "webp"
+                    | "svg"
+                    | "ico"
+                    | "woff"
+                    | "woff2"
+                    | "ttf"
+                    | "otf"
+                    | "eot"
+            ) && let Ok(rel) = path.strip_prefix(&self.project_dir)
+            {
+                return Some(ChangeType::Asset(rel.to_path_buf()));
+            }
+
+            // Content files trigger rebuild (markdown, data files, Lua scripts)
             if matches!(ext, "md" | "html" | "htm" | "json" | "lua")
                 && let Ok(rel) = path.strip_prefix(&self.project_dir)
             {
@@ -262,6 +301,10 @@ pub fn format_changes(changes: &ChangeSet) -> String {
 
     if changes.rebuild_css {
         parts.push("styles".to_string());
+    }
+
+    if !changes.asset_files.is_empty() {
+        parts.push(format!("{} assets", changes.asset_files.len()));
     }
 
     if changes.rebuild_home {

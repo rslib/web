@@ -1,6 +1,4 @@
-//! Environment functions for Lua API
-//!
-//! Functions: env, print, is_gitignored
+//! Environment functions - env, print, is_gitignored
 
 use mlua::{Lua, Result, Table, Value};
 use std::path::{Path, PathBuf};
@@ -16,14 +14,14 @@ pub fn register(lua: &Lua, module: &Table, project_root: &Path) -> Result<()> {
     })?;
     module.set("env", env_fn)?;
 
-    // print(...) - Log to build output
+    // print(...) - Log to build output (uses special "lua_print" target, always visible)
     let print_fn = lua.create_function(|_, args: mlua::Variadic<String>| {
         let msg = args
             .iter()
             .map(|s| s.as_str())
             .collect::<Vec<_>>()
             .join("\t");
-        log::info!("[Lua] {}", msg);
+        log::info!(target: "lua_print", "{}", msg);
         Ok(())
     })?;
     module.set("print", print_fn)?;

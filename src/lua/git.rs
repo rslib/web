@@ -1,6 +1,4 @@
-//! Git functions for Lua API
-//!
-//! Functions: git_info
+//! Git functions - git_info
 
 use super::helpers::{is_path_within_root, resolve_path};
 use mlua::{Lua, Result, Table, Value};

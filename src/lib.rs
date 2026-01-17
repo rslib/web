@@ -113,6 +113,7 @@
 //!
 //! **Asset Building:**
 //! - `build_css(pattern, output, options?)` - Build and concatenate CSS files
+//! - `download_google_font(family, options)` - Download Google Font (async)
 //!
 //! **Text Processing:**
 //! - `slugify(text)` - Convert text to URL-friendly slug
@@ -149,27 +150,20 @@
 //! **Environment:**
 //! - `env(name)` - Get environment variable
 //! - `print(...)` - Log output to build log
+//! - `git_info(path?)` - Get git info (hash, branch, author, date, dirty)
 //!
-//! **Async I/O (rs.async):**
-//! - `fetch(url, options?)` - HTTP fetch (blocking)
-//! - `fetch_json(url, options?)` - Fetch and parse JSON
-//! - `fetch_all(requests)` - Fetch multiple URLs concurrently
-//! - `spawn(url, options?)` - Spawn async fetch task
-//! - `await(task)` - Await spawned task
-//! - `await_all(tasks)` - Await multiple tasks
-//! - `read(path)` - Read file as binary
-//! - `read_file(path)` - Read file as text
-//! - `read_files(paths)` - Read multiple files concurrently
-//! - `write_file(path, content)` - Write file
-//! - `copy_file(src, dst)` - Copy file
-//! - `rename(src, dst)` - Rename/move file or directory
-//! - `remove_file(path)` - Remove file
-//! - `remove_dir(path)` - Remove directory recursively
-//! - `create_dir(path)` - Create directory (including parents)
-//! - `exists(path)` - Check if path exists
-//! - `metadata(path)` - Get file metadata
-//! - `read_dir(path)` - List directory contents
-//! - `canonicalize(path)` - Get canonical/absolute path
+//! **Parallel (rs.parallel):** Rayon-backed parallel operations
+//! - `load_json(paths)` / `load_yaml(paths)` - Load multiple files in parallel
+//! - `read_files(paths)` / `read_frontmatter(paths)` - Read multiple files
+//! - `create_dirs(paths)` / `copy_files(sources, dests)` - Parallel file operations
+//! - `image_convert(sources, dests, opts?)` - Convert images in parallel
+//!
+//! **Async I/O (rs.async):** All return handles, await with `rs.async.await(task)` or `rs.async.await_all(tasks)`
+//! - `fetch(url, opts?)` / `fetch_bytes(url, opts?)` - HTTP fetch (text/binary)
+//! - `fetch_sync(url, opts?)` - Blocking fetch (returns response directly)
+//! - `write_file(path, content)` / `write(path, bytes)` - Write text/binary
+//! - `copy_file(src, dst)` / `create_dir(path)` - File/dir operations
+//! - `exists(path)` / `read_file(path)` - Check existence / read file
 //!
 //! **Encryption (rs.crypt):**
 //! - `encrypt(content, password?)` - Encrypt content (AES-256-GCM)
@@ -197,7 +191,7 @@
 //! ---
 //! ```
 //!
-//! ## Encryption (via Lua)
+//! ## Encryption
 //!
 //! Encryption is handled via the `rs.crypt` module in Lua. Use `SITE_PASSWORD`
 //! environment variable or pass password explicitly:
@@ -245,6 +239,14 @@
 //! - [`templates`] - Tera template rendering
 //! - [`encryption`] - AES-256-GCM encryption utilities (used by `rs.crypt` Lua module)
 //! - [`build`] - Main build orchestrator
+
+/// Print output at info level (always shown regardless of log level)
+#[macro_export]
+macro_rules! rs_print {
+    ($($arg:tt)*) => {
+        log::info!(target: "rs_print", "{}", format!($($arg)*))
+    };
+}
 
 pub mod assets;
 pub mod build;

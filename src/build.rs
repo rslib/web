@@ -10,7 +10,10 @@ use std::sync::Arc;
 use crate::config::{Config, PageDef};
 use crate::markdown::{Pipeline, TransformContext};
 use crate::templates::Templates;
-use crate::tracker::{BuildTracker, CachedDeps, SharedTracker};
+use crate::tracker::{
+    AssetRef, BuildTracker, CachedDeps, SharedTracker, extract_html_asset_refs,
+    extract_markdown_asset_refs, resolve_url_to_source,
+};
 
 /// Cache file name
 const CACHE_FILE: &str = ".rs-web-cache/deps.bin";
@@ -126,7 +129,7 @@ impl Builder {
         self.render_pages(&pages, &global_data, &templates, &pipeline)?;
 
         info!("Build complete: {} pages generated", pages.len());
-        println!("Generated {} pages", pages.len());
+        rs_print!("Generated {} pages", pages.len());
 
         // Run after_build hook
         trace!("Running after_build hook");
@@ -167,11 +170,20 @@ impl Builder {
     }
 
     /// Check if a file was tracked as a dependency in the last build
+    /// This includes both explicit reads (via Lua API) and implicit refs (via HTML/markdown)
     pub fn is_tracked_file(&self, path: &Path) -> bool {
         if let Some(ref cached) = self.cached_deps {
             // Canonicalize path for comparison
             let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-            cached.reads.contains_key(&path)
+            // Check if it was read via Lua API (copy_file, read_file, etc.)
+            if cached.reads.contains_key(&path) {
+                return true;
+            }
+            // Check if it's referenced in any page's HTML/markdown
+            if cached.asset_to_pages.contains_key(&path) {
+                return true;
+            }
+            false
         } else {
             // No cache, assume all files are relevant
             true
@@ -230,7 +242,7 @@ impl Builder {
                 };
 
                 if file_path.exists() {
-                    println!("  Removed: {}", old_page.path);
+                    rs_print!("  Removed: {}", old_page.path);
                     fs::remove_file(&file_path)?;
 
                     // Try to remove empty parent directory
@@ -290,6 +302,9 @@ impl Builder {
             templates.render_page(&self.config, page, global_data, html_content.as_deref())?
         };
 
+        // Extract asset references from the generated HTML and markdown content
+        self.extract_and_record_asset_refs(page, &html);
+
         // Write output file
         let relative_path = page.path.trim_matches('/');
 
@@ -323,6 +338,42 @@ impl Builder {
         Ok(())
     }
 
+    /// Extract asset references from HTML and markdown, record them in tracker
+    fn extract_and_record_asset_refs(&self, page: &PageDef, html: &str) {
+        // Extract from HTML
+        let mut url_paths: Vec<String> = extract_html_asset_refs(html);
+
+        // Also extract from markdown content if present
+        if let Some(ref markdown) = page.content {
+            let md_refs = extract_markdown_asset_refs(markdown);
+            url_paths.extend(md_refs);
+        }
+
+        if url_paths.is_empty() {
+            return;
+        }
+
+        // Get writes to resolve URL paths to source files
+        let writes = self.tracker.get_writes();
+
+        // Convert URL paths to AssetRefs with source resolution
+        let asset_refs: Vec<AssetRef> = url_paths
+            .into_iter()
+            .map(|url_path| {
+                let source_path =
+                    resolve_url_to_source(&url_path, &self.output_dir, &writes, &self.project_dir);
+                AssetRef {
+                    url_path,
+                    source_path,
+                }
+            })
+            .collect();
+
+        // Record in tracker
+        let page_path = PathBuf::from(&page.path);
+        self.tracker.record_html_refs(page_path, asset_refs);
+    }
+
     /// Perform an incremental build based on what changed
     /// Uses tracker data to filter changes to only files that were actually used
     pub fn incremental_build(&mut self, changes: &crate::watch::ChangeSet) -> Result<()> {
@@ -335,46 +386,80 @@ impl Builder {
         }
 
         // Filter content changes to only files that were tracked as dependencies
-        let relevant_changes: Vec<PathBuf> = changes
+        let relevant_content: Vec<PathBuf> = changes
             .content_files
             .iter()
             .filter(|p| {
                 let full_path = self.project_dir.join(p);
                 let is_tracked = self.is_tracked_file(&full_path);
                 if !is_tracked {
-                    trace!("Skipping untracked file: {:?}", p);
+                    trace!("Skipping untracked content file: {:?}", p);
                 }
                 is_tracked
             })
             .map(|p| self.project_dir.join(p))
             .collect();
 
+        // Filter asset changes to only files that were tracked as dependencies
+        let relevant_assets: Vec<PathBuf> = changes
+            .asset_files
+            .iter()
+            .filter(|p| {
+                let full_path = self.project_dir.join(p);
+                let is_tracked = self.is_tracked_file(&full_path);
+                if !is_tracked {
+                    trace!("Skipping untracked asset file: {:?}", p);
+                }
+                is_tracked
+            })
+            .map(|p| self.project_dir.join(p))
+            .collect();
+
+        // Log skipped files
+        if !changes.content_files.is_empty() && relevant_content.is_empty() {
+            debug!(
+                "All {} content files were untracked, skipping",
+                changes.content_files.len()
+            );
+        }
+        if !changes.asset_files.is_empty() && relevant_assets.is_empty() {
+            debug!(
+                "All {} asset files were untracked, skipping",
+                changes.asset_files.len()
+            );
+        }
+
+        // Handle asset changes first (before_build runs copy_file, etc.)
+        if !relevant_assets.is_empty() {
+            debug!(
+                "{} tracked assets changed (out of {} total)",
+                relevant_assets.len(),
+                changes.asset_files.len()
+            );
+            self.rebuild_assets_only(&relevant_assets)?;
+        }
+
+        // Handle CSS changes
+        if changes.rebuild_css {
+            self.rebuild_css_only()?;
+        }
+
         // Content files changed - try incremental update
-        if !relevant_changes.is_empty() {
+        if !relevant_content.is_empty() {
             debug!(
                 "{} tracked content files changed (out of {} total)",
-                relevant_changes.len(),
+                relevant_content.len(),
                 changes.content_files.len()
             );
-            return self.rebuild_content_only(&relevant_changes);
-        } else if !changes.content_files.is_empty() {
-            debug!(
-                "All {} changed files were untracked, skipping rebuild",
-                changes.content_files.len()
-            );
+            return self.rebuild_content_only(&relevant_content);
         }
 
         // Template changes - re-render affected pages with cached data (skip Lua calls)
         if changes.has_template_changes() {
             for path in &changes.template_files {
-                println!("  Changed: {}", path.display());
+                rs_print!("  Changed: {}", path.display());
             }
             return self.rebuild_templates_only(&changes.template_files);
-        }
-
-        // Handle CSS-only changes
-        if changes.rebuild_css {
-            self.rebuild_css_only()?;
         }
 
         Ok(())
@@ -390,9 +475,9 @@ impl Builder {
         // Print changed files
         for path in changed_paths {
             if let Ok(rel) = path.strip_prefix(&self.project_dir) {
-                println!("  Changed: {}", rel.display());
+                rs_print!("  Changed: {}", rel.display());
             } else {
-                println!("  Changed: {}", path.display());
+                rs_print!("  Changed: {}", path.display());
             }
         }
 
@@ -438,7 +523,7 @@ impl Builder {
         self.tracker.merge_all_threads();
         self.save_cached_deps()?;
 
-        println!("Re-rendered {} pages (content changed)", pages.len());
+        rs_print!("Re-rendered {} pages (content changed)", pages.len());
         Ok(())
     }
 
@@ -492,7 +577,7 @@ impl Builder {
             .collect();
 
         if pages_to_rebuild.is_empty() {
-            println!("No pages affected by template changes");
+            rs_print!("No pages affected by template changes");
             return Ok(());
         }
 
@@ -507,7 +592,7 @@ impl Builder {
         // Re-render only affected pages with cached data
         self.render_pages(&pages_to_rebuild, &global_data, &templates, &pipeline)?;
 
-        println!(
+        rs_print!(
             "Re-rendered {} of {} pages (templates changed)",
             pages_to_rebuild.len(),
             all_pages.len()
@@ -517,9 +602,23 @@ impl Builder {
 
     /// Rebuild CSS by calling before_build hook (CSS is now handled via Lua)
     fn rebuild_css_only(&self) -> Result<()> {
-        println!("  Changed: styles");
+        rs_print!("  Changed: styles");
         self.config.call_before_build()?;
-        println!("Rebuilt CSS");
+        rs_print!("Rebuilt CSS");
+        Ok(())
+    }
+
+    /// Rebuild assets by calling before_build hook (re-copies static files)
+    fn rebuild_assets_only(&self, changed_paths: &[PathBuf]) -> Result<()> {
+        for path in changed_paths {
+            if let Ok(rel) = path.strip_prefix(&self.project_dir) {
+                rs_print!("  Changed: {}", rel.display());
+            } else {
+                rs_print!("  Changed: {}", path.display());
+            }
+        }
+        self.config.call_before_build()?;
+        rs_print!("Rebuilt {} assets", changed_paths.len());
         Ok(())
     }
 

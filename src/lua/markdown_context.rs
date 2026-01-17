@@ -1,6 +1,4 @@
 //! Markdown context tracking for AST transformation
-//!
-//! Provides context information during markdown parsing for transform functions
 
 use mlua::{Lua, Result, Table};
 

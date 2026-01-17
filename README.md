@@ -177,6 +177,7 @@ Available in `config.lua`:
 |----------|-------------|
 | `build_css(paths_or_pattern, output, options?)` | Build and concatenate CSS files (accepts glob pattern or array of paths) |
 | `check_unused_assets(output_dir)` | Find assets not referenced in HTML output |
+| `download_google_font(family, options)` | Download Google Font files and generate local CSS (async, returns handle) |
 
 **Text Processing:**
 
@@ -225,6 +226,7 @@ Available in `config.lua`:
 |----------|-------------|
 | `env(name)` | Get environment variable |
 | `print(...)` | Log output to build log |
+| `git_info(path?)` | Get git info for repo or file (hash, branch, author, date, dirty) |
 
 **Note:** All file operations respect the sandbox setting and are tracked for incremental builds. Paths can be relative (resolved from project root) or absolute.
 
@@ -281,6 +283,22 @@ local posts = rs.parallel.read_frontmatter({
 -- Check multiple files exist in parallel
 local exists = rs.parallel.file_exists({"a.txt", "b.txt"})
 
+-- Create directories in parallel
+rs.parallel.create_dirs({"dist/a", "dist/b", "dist/c"})
+
+-- Copy files in parallel (sources, destinations)
+rs.parallel.copy_files(
+  {"src/a.txt", "src/b.txt"},
+  {"dist/a.txt", "dist/b.txt"}
+)
+
+-- Convert images in parallel
+rs.parallel.image_convert(
+  {"img/a.jpg", "img/b.jpg"},
+  {"dist/a.webp", "dist/b.webp"},
+  { quality = 85 }
+)
+
 -- Functional helpers (sequential but convenient)
 local doubled = rs.parallel.map(items, function(x) return x * 2 end)
 local evens = rs.parallel.filter(items, function(x) return x % 2 == 0 end)
@@ -289,44 +307,25 @@ local sum = rs.parallel.reduce(items, 0, function(acc, x) return acc + x end)
 
 #### Async I/O (Tokio)
 
-True async I/O operations backed by Tokio runtime:
+True async I/O backed by Tokio. All functions return handles - await with `rs.async.await()`:
 
 ```lua
-local rs = require("rs-web")
+-- Spawn concurrent fetches
+local t1 = rs.async.fetch("https://api.example.com/a", { cache = true })
+local t2 = rs.async.fetch_bytes("https://fonts.example.com/font.woff2", { cache = true })
+local t3 = rs.download_google_font("Lexend", { fonts_dir = "dist/fonts", css_path = "dist/fonts.css" })
 
--- HTTP requests
-local response = rs.async.fetch("https://api.example.com/data")
-local json = rs.async.fetch_json("https://api.example.com/users")
+-- Await all together
+local results = rs.async.await_all({t1, t2, t3})
 
--- Spawn multiple requests in parallel
-local t1 = rs.async.spawn("https://api.example.com/a")
-local t2 = rs.async.spawn("https://api.example.com/b")
-local results = rs.async.await_all({t1, t2})
+-- File operations (also return handles)
+local write_task = rs.async.write_file("output.txt", "content")
+local copy_task = rs.async.copy_file("src.txt", "dst.txt")
+local dir_task = rs.async.create_dir("new/nested/dir")
+rs.async.await_all({write_task, copy_task, dir_task})
 
--- File operations
-local content = rs.async.read_file("path/to/file.txt")  -- text
-local bytes = rs.async.read("path/to/image.png")        -- binary
-rs.async.write_file("output.txt", content)              -- text
-rs.async.write("output.bin", bytes)                     -- binary
-
--- Fetch binary data (fonts, images, etc.)
-local font = rs.async.fetch_bytes("https://fonts.gstatic.com/...")
-rs.async.copy_file("src.txt", "dst.txt")
-rs.async.rename("old.txt", "new.txt")
-
--- Directory operations
-local entries = rs.async.read_dir("content/")
-for _, entry in ipairs(entries) do
-  print(entry.name, entry.is_file, entry.is_dir)
-end
-rs.async.create_dir("new/nested/dir")
-rs.async.remove_dir("old/dir")
-
--- Path and metadata
-local abs_path = rs.async.canonicalize("./relative/path")
-local exists = rs.async.exists("file.txt")
-local meta = rs.async.metadata("file.txt")
-print(meta.len, meta.is_file, meta.modified)
+-- Blocking fetch (returns response directly, no await needed)
+local response = rs.async.fetch_sync("https://api.example.com/data")
 ```
 
 ### Configuration Sections

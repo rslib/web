@@ -1,8 +1,4 @@
-//! Text processing functions for Lua API
-//!
-//! Functions: slugify, word_count, reading_time, truncate, strip_tags,
-//!            format_date, parse_date, join_path, basename, dirname, extension,
-//!            hash, hash_file, url_encode, url_decode
+//! Text processing - slugify, word_count, reading_time, format_date, hash, path utils
 
 use chrono::Datelike;
 use mlua::{Lua, Result, Table, Value};

@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use rs_web::build::Builder;
 use rs_web::config::Config;
+use rs_web::rs_print;
 use rs_web::server::{ReloadMessage, ServerConfig, notify_reload, run_server};
 use rs_web::watch::{FileWatcher, format_changes};
 
@@ -138,6 +139,9 @@ fn init_logger(debug: bool, log_level: Option<LogLevel>) {
 
     env_logger::Builder::new()
         .filter_level(level)
+        // Always show rs_print and lua_print (rs.print) regardless of log level
+        .filter_module("rs_print", LevelFilter::Info)
+        .filter_module("lua_print", LevelFilter::Info)
         .format_timestamp(None)
         .format_target(false)
         .init();
@@ -185,7 +189,7 @@ async fn main() -> Result<()> {
 
             // Initial build
             builder.build()?;
-            println!("Built in {:?}", start.elapsed());
+            rs_print!("Built in {:?}", start.elapsed());
 
             // Watch mode
             if watch {
@@ -222,7 +226,7 @@ async fn main() -> Result<()> {
                     rs_web::lua::generate_markdown()
                 };
                 std::fs::write(&output_path, content)?;
-                println!("Generated {}", output_path.display());
+                rs_print!("Generated {}", output_path.display());
             } else {
                 // Output to directory
                 std::fs::create_dir_all(&output_path)?;
@@ -231,14 +235,14 @@ async fn main() -> Result<()> {
                     let content = rs_web::lua::generate_emmylua();
                     let path = output_path.join("rs-web.lua");
                     std::fs::write(&path, content)?;
-                    println!("Generated {}", path.display());
+                    rs_print!("Generated {}", path.display());
                 }
 
                 if generate_markdown {
                     let content = rs_web::lua::generate_markdown();
                     let path = output_path.join("LUA_API.md");
                     std::fs::write(&path, content)?;
-                    println!("Generated {}", path.display());
+                    rs_print!("Generated {}", path.display());
                 }
             }
         }
@@ -407,7 +411,7 @@ dist/
                 log::info!("Created {}", gitignore_path.display());
             }
 
-            println!("Created project '{}' at {}", name, project_dir.display());
+            rs_print!("Created project '{}' at {}", name, project_dir.display());
         }
         Commands::Serve {
             directory,
@@ -448,7 +452,7 @@ dist/
             if !no_build {
                 let start = Instant::now();
                 builder.build()?;
-                println!("Built in {:?}", start.elapsed());
+                rs_print!("Built in {:?}", start.elapsed());
             }
 
             // Start the server
@@ -465,7 +469,7 @@ dist/
                 run_serve_watch_loop(builder, &project_dir, &output_dir, reload_tx)?;
             } else {
                 // Just keep running
-                println!("Press Ctrl+C to stop.\n");
+                rs_print!("Press Ctrl+C to stop.\n");
                 tokio::signal::ctrl_c().await?;
             }
         }
@@ -476,7 +480,7 @@ dist/
 
 /// Run the watch loop for incremental builds
 fn run_watch_loop(mut builder: Builder, project_dir: &Path, output_dir: &Path) -> Result<()> {
-    println!("\nEntering watch mode. Press Ctrl+C to stop.\n");
+    rs_print!("Entering watch mode. Press Ctrl+C to stop.");
 
     let watcher = FileWatcher::new(project_dir, builder.config(), output_dir)?;
 
@@ -487,7 +491,7 @@ fn run_watch_loop(mut builder: Builder, project_dir: &Path, output_dir: &Path) -
             continue;
         }
 
-        println!("\nChange detected: {}", format_changes(&changes));
+        rs_print!("Change detected: {}", format_changes(&changes));
         let start = Instant::now();
 
         // Reload config if it changed
@@ -501,7 +505,7 @@ fn run_watch_loop(mut builder: Builder, project_dir: &Path, output_dir: &Path) -
         // Perform incremental build
         match builder.incremental_build(&changes) {
             Ok(()) => {
-                println!("Rebuilt in {:?}\n", start.elapsed());
+                rs_print!("Rebuilt in {:?}", start.elapsed());
             }
             Err(e) => {
                 error!("Build failed: {}", e);
@@ -517,7 +521,7 @@ fn run_serve_watch_loop(
     output_dir: &Path,
     reload_tx: tokio::sync::broadcast::Sender<ReloadMessage>,
 ) -> Result<()> {
-    println!("Watching for changes. Press Ctrl+C to stop.\n");
+    rs_print!("Watching for changes. Press Ctrl+C to stop.");
 
     let watcher = FileWatcher::new(project_dir, builder.config(), output_dir)?;
 
@@ -528,12 +532,13 @@ fn run_serve_watch_loop(
             continue;
         }
 
-        println!("\nChange detected: {}", format_changes(&changes));
+        rs_print!("Change detected: {}", format_changes(&changes));
         let start = Instant::now();
 
         // Check if only CSS changed for hot reload
         let css_only = changes.rebuild_css
             && !changes.full_rebuild
+            && !changes.has_asset_changes()
             && !changes.has_template_changes()
             && !changes.rebuild_home
             && changes.content_files.is_empty();
@@ -549,15 +554,15 @@ fn run_serve_watch_loop(
         // Perform incremental build
         match builder.incremental_build(&changes) {
             Ok(()) => {
-                println!("Rebuilt in {:?}", start.elapsed());
+                rs_print!("Rebuilt in {:?}", start.elapsed());
 
                 // Send reload notification
                 if css_only {
                     notify_reload(&reload_tx, ReloadMessage::CssReload("*".to_string()));
-                    println!("CSS hot reloaded\n");
+                    rs_print!("CSS hot reloaded");
                 } else {
                     notify_reload(&reload_tx, ReloadMessage::Reload);
-                    println!("Page reloaded\n");
+                    rs_print!("Page reloaded");
                 }
             }
             Err(e) => {

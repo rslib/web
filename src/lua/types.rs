@@ -1,8 +1,4 @@
-//! Lua API type definitions for generating EmmyLua annotations and documentation
-//!
-//! This module provides the type registry used to generate:
-//! - EmmyLua annotations (.lua file with @param, @return, @class)
-//! - Markdown API documentation
+//! Lua API type definitions for EmmyLua annotations
 
 /// A Lua function definition
 #[derive(Debug, Clone)]
@@ -257,6 +253,11 @@ pub static LUA_CLASSES: &[LuaClass] = &[
                 typ: "string?",
                 description: "Font display strategy: 'swap'|'block'|'fallback'|'optional' (default: 'swap')",
             },
+            LuaField {
+                name: "cache",
+                typ: "boolean|string?",
+                description: "Enable caching: true (auto), string (explicit path), false (disabled). Default: true",
+            },
         ],
     },
     LuaClass {
@@ -384,7 +385,25 @@ pub static LUA_CLASSES: &[LuaClass] = &[
     },
     LuaClass {
         name: "AsyncTask",
-        description: "Async task handle for tokio-backed I/O operations",
+        description: "Async fetch task handle (await with rs.async.await)",
+        fields: &[LuaField {
+            name: "is_completed",
+            typ: "fun(): boolean",
+            description: "Check if task has completed",
+        }],
+    },
+    LuaClass {
+        name: "AsyncBytesTask",
+        description: "Async bytes fetch task handle (await with rs.async.await)",
+        fields: &[LuaField {
+            name: "is_completed",
+            typ: "fun(): boolean",
+            description: "Check if task has completed",
+        }],
+    },
+    LuaClass {
+        name: "AsyncIOTask",
+        description: "Async I/O task handle (await with rs.async.await)",
         fields: &[LuaField {
             name: "is_completed",
             typ: "fun(): boolean",
@@ -445,6 +464,11 @@ pub static LUA_CLASSES: &[LuaClass] = &[
                 name: "timeout",
                 typ: "number?",
                 description: "Timeout in seconds",
+            },
+            LuaField {
+                name: "cache",
+                typ: "boolean|string?",
+                description: "Enable caching: true (auto), string (path), false (disabled)",
             },
         ],
     },
@@ -1341,7 +1365,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "download_google_font",
         module: None,
-        description: "Download Google Font files and generate local CSS",
+        description: "Download Google Font files and generate local CSS (async, returns handle)",
         params: &[
             LuaParam {
                 name: "family",
@@ -1356,7 +1380,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
                 optional: false,
             },
         ],
-        returns: "boolean",
+        returns: "AsyncIOTask",
     },
     // IMAGES
     LuaFunction {
@@ -1649,11 +1673,89 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         ],
         returns: "U",
     },
-    // ASYNC MODULE (tokio-backed)
+    LuaFunction {
+        name: "create_dirs",
+        module: Some("parallel"),
+        description: "Create multiple directories in parallel",
+        params: &[LuaParam {
+            name: "paths",
+            typ: "string[]",
+            description: "Directory paths to create",
+            optional: false,
+        }],
+        returns: "(boolean|string)[]",
+    },
+    LuaFunction {
+        name: "copy_files",
+        module: Some("parallel"),
+        description: "Copy multiple files in parallel",
+        params: &[
+            LuaParam {
+                name: "sources",
+                typ: "string[]",
+                description: "Source file paths",
+                optional: false,
+            },
+            LuaParam {
+                name: "destinations",
+                typ: "string[]",
+                description: "Destination file paths",
+                optional: false,
+            },
+        ],
+        returns: "(boolean|string)[]",
+    },
+    LuaFunction {
+        name: "image_convert",
+        module: Some("parallel"),
+        description: "Convert multiple images in parallel",
+        params: &[
+            LuaParam {
+                name: "sources",
+                typ: "string[]",
+                description: "Source image paths",
+                optional: false,
+            },
+            LuaParam {
+                name: "destinations",
+                typ: "string[]",
+                description: "Destination image paths",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "ImageConvertOptions",
+                description: "Convert options (quality)",
+                optional: true,
+            },
+        ],
+        returns: "(boolean|string)[]",
+    },
+    // ASYNC MODULE (tokio-backed) - all return handles, await with rs.async.await()
     LuaFunction {
         name: "fetch",
         module: Some("async"),
-        description: "Fetch URL (blocking)",
+        description: "Fetch URL (returns handle, await to get response)",
+        params: &[
+            LuaParam {
+                name: "url",
+                typ: "string",
+                description: "URL to fetch",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "FetchOptions",
+                description: "Request options",
+                optional: true,
+            },
+        ],
+        returns: "AsyncTask",
+    },
+    LuaFunction {
+        name: "fetch_sync",
+        module: Some("async"),
+        description: "Fetch URL (blocking, returns response directly)",
         params: &[
             LuaParam {
                 name: "url",
@@ -1749,19 +1851,19 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "read_file",
         module: Some("async"),
-        description: "Read file asynchronously",
+        description: "Read file (returns handle)",
         params: &[LuaParam {
             name: "path",
             typ: "string",
             description: "File path",
             optional: false,
         }],
-        returns: "string",
+        returns: "AsyncIOTask",
     },
     LuaFunction {
         name: "write_file",
         module: Some("async"),
-        description: "Write file asynchronously",
+        description: "Write file (returns handle)",
         params: &[
             LuaParam {
                 name: "path",
@@ -1776,7 +1878,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
                 optional: false,
             },
         ],
-        returns: "boolean",
+        returns: "AsyncIOTask",
     },
     LuaFunction {
         name: "read_files",
@@ -1805,7 +1907,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "copy_file",
         module: Some("async"),
-        description: "Copy file asynchronously",
+        description: "Copy file (returns handle)",
         params: &[
             LuaParam {
                 name: "src",
@@ -1820,7 +1922,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
                 optional: false,
             },
         ],
-        returns: "number",
+        returns: "AsyncIOTask",
     },
     LuaFunction {
         name: "rename",
@@ -1845,14 +1947,14 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "create_dir",
         module: Some("async"),
-        description: "Create directory (including parents) asynchronously",
+        description: "Create directory including parents (returns handle)",
         params: &[LuaParam {
             name: "path",
             typ: "string",
             description: "Directory path",
             optional: false,
         }],
-        returns: "boolean",
+        returns: "AsyncIOTask",
     },
     LuaFunction {
         name: "remove_file",
@@ -1881,14 +1983,14 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "exists",
         module: Some("async"),
-        description: "Check if file/directory exists asynchronously",
+        description: "Check if file/directory exists (returns handle)",
         params: &[LuaParam {
             name: "path",
             typ: "string",
             description: "Path to check",
             optional: false,
         }],
-        returns: "boolean",
+        returns: "AsyncIOTask",
     },
     LuaFunction {
         name: "metadata",
@@ -1917,7 +2019,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "write",
         module: Some("async"),
-        description: "Write binary data to file asynchronously",
+        description: "Write binary data to file (returns handle)",
         params: &[
             LuaParam {
                 name: "path",
@@ -1932,12 +2034,12 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
                 optional: false,
             },
         ],
-        returns: "boolean",
+        returns: "AsyncIOTask",
     },
     LuaFunction {
         name: "fetch_bytes",
         module: Some("async"),
-        description: "Fetch URL and return binary response body",
+        description: "Fetch URL binary (returns handle)",
         params: &[
             LuaParam {
                 name: "url",
@@ -1952,7 +2054,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
                 optional: true,
             },
         ],
-        returns: "FetchResponse",
+        returns: "AsyncBytesTask",
     },
     LuaFunction {
         name: "read_dir",

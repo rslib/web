@@ -1,13 +1,6 @@
-//! Async I/O functions for Lua API (tokio-backed)
+//! Async I/O module (rs.async) - tokio-backed async operations
 //!
-//! HTTP Functions: async.fetch, async.fetch_json, async.fetch_all, async.spawn, async.await, async.await_all
-//!
-//! File Functions: async.read, async.read_file, async.read_files, async.write_file, async.load_json,
-//!                 async.copy_file, async.rename, async.remove_file, async.remove_dir,
-//!                 async.create_dir, async.exists, async.metadata, async.read_dir, async.canonicalize
-//!
-//! These functions use tokio for async I/O, allowing non-blocking
-//! HTTP requests and file operations from Lua scripts.
+//! All functions return handles that must be awaited with rs.async.await() or rs.async.await_all().
 
 use mlua::{Lua, LuaSerdeExt, Result, Table, UserData, UserDataMethods, Value};
 use parking_lot::Mutex;
@@ -18,7 +11,7 @@ use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 
 /// Global tokio runtime for async operations
-fn runtime() -> &'static Runtime {
+pub fn runtime() -> &'static Runtime {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
@@ -70,13 +63,26 @@ impl Method {
     }
 }
 
+/// Cache option for fetch and other network operations
+#[derive(Debug, Clone, Default)]
+pub enum CacheOption {
+    #[default]
+    Disabled,
+    /// Auto-generate cache path from URL hash
+    Auto,
+    /// Use explicit cache path
+    Path(PathBuf),
+}
+
 /// Fetch options
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct FetchOptions {
     method: Method,
     headers: HashMap<String, String>,
     body: Option<String>,
     timeout_secs: Option<u64>,
+    /// Cache option: false (disabled), true (auto path), or string (explicit path)
+    cache: CacheOption,
 }
 
 impl FetchOptions {
@@ -109,8 +115,43 @@ impl FetchOptions {
             opts.timeout_secs = Some(timeout);
         }
 
+        // Cache option: bool (true = auto path) or string (explicit path)
+        if let Ok(cache_path) = table.get::<String>("cache") {
+            opts.cache = CacheOption::Path(PathBuf::from(cache_path));
+        } else if let Ok(cache_bool) = table.get::<bool>("cache") {
+            opts.cache = if cache_bool {
+                CacheOption::Auto
+            } else {
+                CacheOption::Disabled
+            };
+        }
+
         Ok(opts)
     }
+}
+
+/// Generate cache path from URL using xxhash
+fn get_cache_path(url: &str, project_root: &Path) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    use twox_hash::XxHash64;
+    let mut hasher = XxHash64::with_seed(0);
+    url.hash(&mut hasher);
+    let hash = hasher.finish();
+    let hash_hex = format!("{:016x}", hash);
+    project_root.join(".rs-web-cache/downloads").join(hash_hex)
+}
+
+/// Try to read from cache, returns None if not cached
+fn read_cache(cache_path: &Path) -> Option<Vec<u8>> {
+    std::fs::read(cache_path).ok()
+}
+
+/// Write to cache
+fn write_cache(cache_path: &Path, data: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = cache_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(cache_path, data)
 }
 
 /// Result type for fetch operations
@@ -148,6 +189,116 @@ struct FetchResponse {
     headers: HashMap<String, String>,
     body: String,
     ok: bool,
+}
+
+/// Result type for bytes fetch operations
+type BytesFetchResult = std::result::Result<BytesFetchResponse, String>;
+
+/// Bytes response structure
+#[derive(Clone)]
+struct BytesFetchResponse {
+    status: u16,
+    body: Vec<u8>,
+    ok: bool,
+}
+
+impl BytesFetchResponse {
+    fn to_lua_table(&self, lua: &Lua) -> Result<Table> {
+        let table = lua.create_table()?;
+        table.set("status", self.status)?;
+        table.set("ok", self.ok)?;
+        table.set("body", lua.create_string(&self.body)?)?;
+        Ok(table)
+    }
+}
+
+/// Async task handle for bytes fetch
+struct AsyncBytesTask {
+    handle: Arc<Mutex<Option<JoinHandle<BytesFetchResult>>>>,
+    result: Arc<Mutex<Option<BytesFetchResult>>>,
+    completed: Arc<Mutex<bool>>,
+}
+
+impl Clone for AsyncBytesTask {
+    fn clone(&self) -> Self {
+        Self {
+            handle: Arc::clone(&self.handle),
+            result: Arc::clone(&self.result),
+            completed: Arc::clone(&self.completed),
+        }
+    }
+}
+
+impl UserData for AsyncBytesTask {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("is_completed", |_, this, _: ()| Ok(*this.completed.lock()));
+    }
+}
+
+/// Result type for generic I/O operations
+type IOResult = std::result::Result<IOResponse, String>;
+
+/// I/O operation response - can hold different result types
+#[derive(Clone)]
+enum IOResponse {
+    Ok,             // For operations that just succeed (create_dir, write)
+    Bytes(u64),     // For copy (bytes copied)
+    Bool(bool),     // For exists check
+    String(String), // For read operations
+}
+
+impl IOResponse {
+    fn to_lua_value(&self, lua: &Lua) -> Result<Value> {
+        match self {
+            IOResponse::Ok => Ok(Value::Boolean(true)),
+            IOResponse::Bytes(n) => Ok(Value::Integer(*n as i64)),
+            IOResponse::Bool(b) => Ok(Value::Boolean(*b)),
+            IOResponse::String(s) => Ok(Value::String(lua.create_string(s)?)),
+        }
+    }
+}
+
+/// Async task handle for I/O operations
+pub struct AsyncIOTask {
+    handle: Arc<Mutex<Option<JoinHandle<IOResult>>>>,
+    result: Arc<Mutex<Option<IOResult>>>,
+    completed: Arc<Mutex<bool>>,
+}
+
+impl AsyncIOTask {
+    /// Create a new AsyncIOTask from a JoinHandle that returns Result<(), String>
+    pub fn new(handle: JoinHandle<std::result::Result<(), String>>) -> Self {
+        // Wrap the handle to convert Result<(), String> to IOResult
+        let wrapped_handle = runtime().spawn(async move {
+            match handle.await {
+                Ok(Ok(())) => Ok(IOResponse::Ok),
+                Ok(Err(e)) => Err(e),
+                Err(e) => Err(format!("Task panicked: {}", e)),
+            }
+        });
+
+        Self {
+            handle: Arc::new(Mutex::new(Some(wrapped_handle))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        }
+    }
+}
+
+impl Clone for AsyncIOTask {
+    fn clone(&self) -> Self {
+        Self {
+            handle: Arc::clone(&self.handle),
+            result: Arc::clone(&self.result),
+            completed: Arc::clone(&self.completed),
+        }
+    }
+}
+
+impl UserData for AsyncIOTask {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("is_completed", |_, this, _: ()| Ok(*this.completed.lock()));
+    }
 }
 
 impl FetchResponse {
@@ -269,14 +420,22 @@ async fn do_fetch_bytes(
 use std::path::Path;
 
 use super::helpers::{is_path_within_root, resolve_path};
+use crate::tracker::SharedTracker;
 
 /// Create the async module table
-pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Table> {
+pub fn create_module(
+    lua: &Lua,
+    project_root: &Path,
+    sandbox: bool,
+    tracker: SharedTracker,
+) -> Result<Table> {
     let async_module = lua.create_table()?;
     let root = project_root.to_path_buf();
 
     // async.fetch(url, options?) - Fetch a URL
-    let fetch = lua.create_function(|lua, args: (String, Option<Table>)| {
+    // options.cache: bool|string - if true, auto-cache; if string, use as cache path
+    let root_clone = root.clone();
+    let fetch = lua.create_function(move |lua, args: (String, Option<Table>)| {
         let (url, opts_table) = args;
 
         let opts = if let Some(ref t) = opts_table {
@@ -285,19 +444,75 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             FetchOptions::default()
         };
 
+        // Resolve cache path
+        let cache_path = match &opts.cache {
+            CacheOption::Disabled => None,
+            CacheOption::Auto => Some(get_cache_path(&url, &root_clone)),
+            CacheOption::Path(p) => Some(if p.is_absolute() {
+                p.clone()
+            } else {
+                root_clone.join(p)
+            }),
+        };
+
+        // Check cache first
+        if let Some(ref path) = cache_path
+            && let Some(cached) = read_cache(path)
+            && let Ok(body) = String::from_utf8(cached)
+        {
+            let response = FetchResponse {
+                status: 200,
+                headers: HashMap::new(),
+                body,
+                ok: true,
+            };
+            let table = response.to_lua_table(lua)?;
+            return Ok(Value::Table(table));
+        }
+
         let result = block_on(do_fetch(&url, &opts));
 
         match result {
             Ok(response) => {
+                // Write to cache if enabled and successful
+                if response.ok
+                    && let Some(ref path) = cache_path
+                {
+                    let _ = write_cache(path, response.body.as_bytes());
+                }
                 let table = response.to_lua_table(lua)?;
                 Ok(Value::Table(table))
             }
             Err(e) => Err(mlua::Error::RuntimeError(format!("Fetch failed: {}", e))),
         }
     })?;
-    async_module.set("fetch", fetch)?;
+    async_module.set("fetch_sync", fetch)?;
 
-    // async.fetch_json(url, options?) - Fetch and parse as JSON
+    // async.fetch(url, options?) - Async fetch, returns handle for await
+    // This is the TRUE async version - returns immediately with a handle
+    let fetch_async = lua.create_function(|_lua, args: (String, Option<Table>)| {
+        let (url, opts_table) = args;
+
+        let opts = if let Some(ref t) = opts_table {
+            FetchOptions::from_lua_table(_lua, t)?
+        } else {
+            FetchOptions::default()
+        };
+
+        // Spawn the task on the runtime (non-blocking)
+        let handle = runtime().spawn(async move { do_fetch(&url, &opts).await });
+
+        let task = AsyncTask {
+            handle: Arc::new(Mutex::new(Some(handle))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        };
+
+        Ok(task)
+    })?;
+    async_module.set("fetch", fetch_async)?;
+
+    // async.fetch_json(url, options?) - Fetch and parse as JSON (blocking for convenience)
     let fetch_json = lua.create_function(|lua, args: (String, Option<Table>)| {
         let (url, opts_table) = args;
 
@@ -336,7 +551,9 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
     async_module.set("fetch_json", fetch_json)?;
 
     // async.fetch_bytes(url, options?) - Fetch binary data (for fonts, images, etc.)
-    let fetch_bytes = lua.create_function(|lua, args: (String, Option<Table>)| {
+    // options.cache: bool|string - if true, auto-cache; if string, use as cache path
+    let root_clone = root.clone();
+    let fetch_bytes = lua.create_function(move |lua, args: (String, Option<Table>)| {
         let (url, opts_table) = args;
 
         let opts = if let Some(ref t) = opts_table {
@@ -345,10 +562,36 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             FetchOptions::default()
         };
 
+        // Resolve cache path
+        let cache_path = match &opts.cache {
+            CacheOption::Disabled => None,
+            CacheOption::Auto => Some(get_cache_path(&url, &root_clone)),
+            CacheOption::Path(p) => Some(if p.is_absolute() {
+                p.clone()
+            } else {
+                root_clone.join(p)
+            }),
+        };
+
+        // Check cache first
+        if let Some(ref path) = cache_path
+            && let Some(cached) = read_cache(path)
+        {
+            let table = lua.create_table()?;
+            table.set("status", 200u16)?;
+            table.set("ok", true)?;
+            table.set("body", lua.create_string(&cached)?)?;
+            return Ok(Value::Table(table));
+        }
+
         let result = block_on(do_fetch_bytes(&url, &opts));
 
         match result {
             Ok((status, ok, bytes)) => {
+                // Write to cache if enabled and successful
+                if ok && let Some(ref path) = cache_path {
+                    let _ = write_cache(path, &bytes);
+                }
                 let table = lua.create_table()?;
                 table.set("status", status)?;
                 table.set("ok", ok)?;
@@ -358,7 +601,68 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             Err(e) => Err(mlua::Error::RuntimeError(format!("Fetch failed: {}", e))),
         }
     })?;
-    async_module.set("fetch_bytes", fetch_bytes)?;
+    async_module.set("fetch_bytes_sync", fetch_bytes)?;
+
+    // async.fetch_bytes(url, options?) - Async fetch bytes, returns handle for await
+    let root_clone = root.clone();
+    let fetch_bytes_async = lua.create_function(move |lua, args: (String, Option<Table>)| {
+        let (url, opts_table) = args;
+
+        let opts = if let Some(ref t) = opts_table {
+            FetchOptions::from_lua_table(lua, t)?
+        } else {
+            FetchOptions::default()
+        };
+
+        let root_for_cache = root_clone.clone();
+
+        // Spawn the task on the runtime (non-blocking)
+        let handle = runtime().spawn(async move {
+            // Check cache first
+            let cache_path = match &opts.cache {
+                CacheOption::Disabled => None,
+                CacheOption::Auto => Some(get_cache_path(&url, &root_for_cache)),
+                CacheOption::Path(p) => Some(if p.is_absolute() {
+                    p.clone()
+                } else {
+                    root_for_cache.join(p)
+                }),
+            };
+
+            if let Some(ref path) = cache_path
+                && let Some(cached) = read_cache(path)
+            {
+                return Ok(BytesFetchResponse {
+                    status: 200,
+                    body: cached,
+                    ok: true,
+                });
+            }
+
+            match do_fetch_bytes(&url, &opts).await {
+                Ok((status, ok, bytes)) => {
+                    if ok && let Some(ref path) = cache_path {
+                        let _ = write_cache(path, &bytes);
+                    }
+                    Ok(BytesFetchResponse {
+                        status,
+                        body: bytes,
+                        ok,
+                    })
+                }
+                Err(e) => Err(e),
+            }
+        });
+
+        let task = AsyncBytesTask {
+            handle: Arc::new(Mutex::new(Some(handle))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        };
+
+        Ok(task)
+    })?;
+    async_module.set("fetch_bytes", fetch_bytes_async)?;
 
     // async.fetch_all(requests) - Fetch multiple URLs concurrently
     // requests is a table of {url, options?} or just strings
@@ -441,97 +745,234 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
     })?;
     async_module.set("spawn", spawn)?;
 
-    // async.await(task) - Await a spawned task
+    // async.await(task) - Await a spawned task (handles both AsyncTask and AsyncBytesTask)
     let await_fn = lua.create_function(|lua, ud: mlua::AnyUserData| {
-        let task = ud.borrow::<AsyncTask>()?;
-
-        // Check if already completed
-        if *task.completed.lock()
-            && let Some(ref result) = *task.result.lock()
-        {
-            return match result {
-                Ok(response) => {
-                    let table = response.to_lua_table(lua)?;
-                    Ok(Value::Table(table))
-                }
-                Err(e) => Err(mlua::Error::RuntimeError(format!("Fetch failed: {}", e))),
-            };
-        }
-
-        // Take the handle and block on it
-        let handle = task.handle.lock().take();
-        drop(task); // Release borrow before blocking
-
-        if let Some(h) = handle {
-            let result = block_on(h);
-            let task = ud.borrow::<AsyncTask>()?;
-            match result {
-                Ok(fetch_result) => {
-                    *task.completed.lock() = true;
-                    *task.result.lock() = Some(fetch_result.clone());
-                    match fetch_result {
-                        Ok(response) => {
-                            let table = response.to_lua_table(lua)?;
-                            Ok(Value::Table(table))
-                        }
-                        Err(e) => Err(mlua::Error::RuntimeError(format!("Fetch failed: {}", e))),
+        // Try AsyncTask first (text fetch)
+        if let Ok(task) = ud.borrow::<AsyncTask>() {
+            if *task.completed.lock()
+                && let Some(ref result) = *task.result.lock()
+            {
+                return match result {
+                    Ok(response) => {
+                        let table = response.to_lua_table(lua)?;
+                        Ok(Value::Table(table))
                     }
+                    Err(e) => Err(mlua::Error::RuntimeError(format!("Fetch failed: {}", e))),
+                };
+            }
+
+            let handle = task.handle.lock().take();
+            drop(task);
+
+            if let Some(h) = handle {
+                let result = block_on(h);
+                let task = ud.borrow::<AsyncTask>()?;
+                match result {
+                    Ok(fetch_result) => {
+                        *task.completed.lock() = true;
+                        *task.result.lock() = Some(fetch_result.clone());
+                        match fetch_result {
+                            Ok(response) => {
+                                let table = response.to_lua_table(lua)?;
+                                Ok(Value::Table(table))
+                            }
+                            Err(e) => {
+                                Err(mlua::Error::RuntimeError(format!("Fetch failed: {}", e)))
+                            }
+                        }
+                    }
+                    Err(e) => Err(mlua::Error::RuntimeError(format!("Task panicked: {}", e))),
                 }
-                Err(e) => Err(mlua::Error::RuntimeError(format!("Task panicked: {}", e))),
+            } else {
+                Err(mlua::Error::RuntimeError(
+                    "Task handle already consumed".to_string(),
+                ))
+            }
+        }
+        // Try AsyncBytesTask (bytes fetch)
+        else if let Ok(task) = ud.borrow::<AsyncBytesTask>() {
+            if *task.completed.lock()
+                && let Some(ref result) = *task.result.lock()
+            {
+                return match result {
+                    Ok(response) => {
+                        let table = response.to_lua_table(lua)?;
+                        Ok(Value::Table(table))
+                    }
+                    Err(e) => Err(mlua::Error::RuntimeError(format!("Fetch failed: {}", e))),
+                };
+            }
+
+            let handle = task.handle.lock().take();
+            drop(task);
+
+            if let Some(h) = handle {
+                let result = block_on(h);
+                let task = ud.borrow::<AsyncBytesTask>()?;
+                match result {
+                    Ok(fetch_result) => {
+                        *task.completed.lock() = true;
+                        *task.result.lock() = Some(fetch_result.clone());
+                        match fetch_result {
+                            Ok(response) => {
+                                let table = response.to_lua_table(lua)?;
+                                Ok(Value::Table(table))
+                            }
+                            Err(e) => {
+                                Err(mlua::Error::RuntimeError(format!("Fetch failed: {}", e)))
+                            }
+                        }
+                    }
+                    Err(e) => Err(mlua::Error::RuntimeError(format!("Task panicked: {}", e))),
+                }
+            } else {
+                Err(mlua::Error::RuntimeError(
+                    "Task handle already consumed".to_string(),
+                ))
+            }
+        }
+        // Try AsyncIOTask (I/O operations)
+        else if let Ok(task) = ud.borrow::<AsyncIOTask>() {
+            if *task.completed.lock()
+                && let Some(ref result) = *task.result.lock()
+            {
+                return match result {
+                    Ok(response) => response.to_lua_value(lua),
+                    Err(e) => Err(mlua::Error::RuntimeError(format!("I/O failed: {}", e))),
+                };
+            }
+
+            let handle = task.handle.lock().take();
+            drop(task);
+
+            if let Some(h) = handle {
+                let result = block_on(h);
+                let task = ud.borrow::<AsyncIOTask>()?;
+                match result {
+                    Ok(io_result) => {
+                        *task.completed.lock() = true;
+                        *task.result.lock() = Some(io_result.clone());
+                        match io_result {
+                            Ok(response) => response.to_lua_value(lua),
+                            Err(e) => Err(mlua::Error::RuntimeError(format!("I/O failed: {}", e))),
+                        }
+                    }
+                    Err(e) => Err(mlua::Error::RuntimeError(format!("Task panicked: {}", e))),
+                }
+            } else {
+                Err(mlua::Error::RuntimeError(
+                    "Task handle already consumed".to_string(),
+                ))
             }
         } else {
             Err(mlua::Error::RuntimeError(
-                "Task handle already consumed".to_string(),
+                "Expected AsyncTask, AsyncBytesTask, or AsyncIOTask".to_string(),
             ))
         }
     })?;
     // Use raw set to avoid Lua keyword conflict with "await"
     async_module.raw_set("await", await_fn)?;
 
-    // async.await_all(tasks) - Await multiple tasks concurrently
+    // async.await_all(tasks) - Await multiple tasks concurrently (handles mixed task types)
     let await_all = lua.create_function(|lua, tasks_table: Table| {
-        let mut handles: Vec<Option<JoinHandle<FetchResult>>> = Vec::new();
-        let mut already_completed: Vec<(usize, FetchResult)> = Vec::new();
-        let mut task_uds: Vec<mlua::AnyUserData> = Vec::new();
+        enum TaskType {
+            Text(Option<JoinHandle<FetchResult>>, Option<FetchResult>),
+            Bytes(
+                Option<JoinHandle<BytesFetchResult>>,
+                Option<BytesFetchResult>,
+            ),
+            IO(Option<JoinHandle<IOResult>>, Option<IOResult>),
+        }
+
+        let mut tasks: Vec<(mlua::AnyUserData, TaskType)> = Vec::new();
 
         for pair in tasks_table.pairs::<i64, mlua::AnyUserData>() {
             let (_, ud) = pair?;
-            task_uds.push(ud);
+
+            // Determine task type and extract handle
+            if let Ok(task) = ud.borrow::<AsyncTask>() {
+                let completed_result = if *task.completed.lock() {
+                    task.result.lock().clone()
+                } else {
+                    None
+                };
+                let handle = task.handle.lock().take();
+                drop(task);
+                tasks.push((ud, TaskType::Text(handle, completed_result)));
+            } else if let Ok(task) = ud.borrow::<AsyncBytesTask>() {
+                let completed_result = if *task.completed.lock() {
+                    task.result.lock().clone()
+                } else {
+                    None
+                };
+                let handle = task.handle.lock().take();
+                drop(task);
+                tasks.push((ud, TaskType::Bytes(handle, completed_result)));
+            } else if let Ok(task) = ud.borrow::<AsyncIOTask>() {
+                let completed_result = if *task.completed.lock() {
+                    task.result.lock().clone()
+                } else {
+                    None
+                };
+                let handle = task.handle.lock().take();
+                drop(task);
+                tasks.push((ud, TaskType::IO(handle, completed_result)));
+            } else {
+                return Err(mlua::Error::RuntimeError(
+                    "await_all: expected AsyncTask, AsyncBytesTask, or AsyncIOTask".to_string(),
+                ));
+            }
         }
 
-        for (i, ud) in task_uds.iter().enumerate() {
-            let task = ud.borrow::<AsyncTask>()?;
-            if *task.completed.lock()
-                && let Some(ref result) = *task.result.lock()
-            {
-                already_completed.push((i, result.clone()));
-                handles.push(None);
-                continue;
-            }
-            handles.push(task.handle.lock().take());
-        }
+        // Await all handles
+        let results: Vec<_> = block_on(async {
+            let mut results = Vec::with_capacity(tasks.len());
 
-        // Await all pending handles
-        let results = block_on(async {
-            let mut results: Vec<Option<FetchResult>> = Vec::with_capacity(handles.len());
-            for _ in 0..handles.len() {
-                results.push(None);
-            }
-
-            // Insert already completed results
-            for (i, result) in already_completed {
-                results[i] = Some(result);
-            }
-
-            // Await pending handles
-            for (i, handle) in handles.into_iter().enumerate() {
-                if let Some(h) = handle {
-                    match h.await {
-                        Ok(result) => {
-                            results[i] = Some(result);
+            for (_, task_type) in &mut tasks {
+                match task_type {
+                    TaskType::Text(handle, completed) => {
+                        if let Some(result) = completed.take() {
+                            results.push(TaskType::Text(None, Some(result)));
+                        } else if let Some(h) = handle.take() {
+                            match h.await {
+                                Ok(result) => results.push(TaskType::Text(None, Some(result))),
+                                Err(e) => results.push(TaskType::Text(
+                                    None,
+                                    Some(Err(format!("Task panicked: {}", e))),
+                                )),
+                            }
+                        } else {
+                            results.push(TaskType::Text(None, None));
                         }
-                        Err(e) => {
-                            results[i] = Some(Err(format!("Task panicked: {}", e)));
+                    }
+                    TaskType::Bytes(handle, completed) => {
+                        if let Some(result) = completed.take() {
+                            results.push(TaskType::Bytes(None, Some(result)));
+                        } else if let Some(h) = handle.take() {
+                            match h.await {
+                                Ok(result) => results.push(TaskType::Bytes(None, Some(result))),
+                                Err(e) => results.push(TaskType::Bytes(
+                                    None,
+                                    Some(Err(format!("Task panicked: {}", e))),
+                                )),
+                            }
+                        } else {
+                            results.push(TaskType::Bytes(None, None));
+                        }
+                    }
+                    TaskType::IO(handle, completed) => {
+                        if let Some(result) = completed.take() {
+                            results.push(TaskType::IO(None, Some(result)));
+                        } else if let Some(h) = handle.take() {
+                            match h.await {
+                                Ok(result) => results.push(TaskType::IO(None, Some(result))),
+                                Err(e) => results.push(TaskType::IO(
+                                    None,
+                                    Some(Err(format!("Task panicked: {}", e))),
+                                )),
+                            }
+                        } else {
+                            results.push(TaskType::IO(None, None));
                         }
                     }
                 }
@@ -540,30 +981,32 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             results
         });
 
-        // Mark tasks as completed and store results
-        for (i, ud) in task_uds.iter().enumerate() {
-            if let Some(ref result) = results[i] {
-                let task = ud.borrow::<AsyncTask>()?;
-                *task.completed.lock() = true;
-                *task.result.lock() = Some(result.clone());
-            }
-        }
-
         // Convert to Lua table
         let result_table = lua.create_table()?;
         for (i, result) in results.into_iter().enumerate() {
-            if let Some(r) = result {
-                match r {
-                    Ok(response) => {
-                        let table = response.to_lua_table(lua)?;
-                        result_table.set(i + 1, table)?;
-                    }
-                    Err(e) => {
-                        let err_table = lua.create_table()?;
-                        err_table.set("ok", false)?;
-                        err_table.set("error", e)?;
-                        result_table.set(i + 1, err_table)?;
-                    }
+            match result {
+                TaskType::Text(_, Some(Ok(response))) => {
+                    let table = response.to_lua_table(lua)?;
+                    result_table.set(i + 1, table)?;
+                }
+                TaskType::Bytes(_, Some(Ok(response))) => {
+                    let table = response.to_lua_table(lua)?;
+                    result_table.set(i + 1, table)?;
+                }
+                TaskType::IO(_, Some(Ok(response))) => {
+                    let value = response.to_lua_value(lua)?;
+                    result_table.set(i + 1, value)?;
+                }
+                TaskType::Text(_, Some(Err(e)))
+                | TaskType::Bytes(_, Some(Err(e)))
+                | TaskType::IO(_, Some(Err(e))) => {
+                    let err_table = lua.create_table()?;
+                    err_table.set("ok", false)?;
+                    err_table.set("error", e)?;
+                    result_table.set(i + 1, err_table)?;
+                }
+                _ => {
+                    result_table.set(i + 1, Value::Nil)?;
                 }
             }
         }
@@ -618,8 +1061,9 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
     })?;
     async_module.set("read_file", read_file)?;
 
-    // async.write_file(path, content) - Async file write
+    // async.write_file(path, content) - Async file write, returns handle
     let root_clone = root.clone();
+    let tracker_clone = tracker.clone();
     let write_file = lua.create_function(move |_, (path, content): (String, String)| {
         let resolved = resolve_path(&path, &root_clone);
         if sandbox && !is_path_within_root(&resolved, &root_clone) {
@@ -629,28 +1073,36 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             )));
         }
 
-        // Ensure parent directory exists
-        if let Some(parent) = resolved.parent() {
-            let parent = parent.to_path_buf();
-            block_on(async {
-                tokio::fs::create_dir_all(&parent).await.ok();
-            });
-        }
+        let tracker = tracker_clone.clone();
+        let content_bytes = content.clone().into_bytes();
+        let handle = runtime().spawn(async move {
+            // Ensure parent directory exists
+            if let Some(parent) = resolved.parent() {
+                tokio::fs::create_dir_all(parent).await.ok();
+            }
 
-        let result = block_on(async { tokio::fs::write(&resolved, &content).await });
+            match tokio::fs::write(&resolved, &content).await {
+                Ok(()) => {
+                    // Track the write
+                    let canonical = resolved.canonicalize().unwrap_or(resolved);
+                    tracker.record_write(canonical, &content_bytes);
+                    Ok(IOResponse::Ok)
+                }
+                Err(e) => Err(format!("Failed to write file: {}", e)),
+            }
+        });
 
-        match result {
-            Ok(()) => Ok(true),
-            Err(e) => Err(mlua::Error::RuntimeError(format!(
-                "Failed to write file '{}': {}",
-                path, e
-            ))),
-        }
+        Ok(AsyncIOTask {
+            handle: Arc::new(Mutex::new(Some(handle))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        })
     })?;
     async_module.set("write_file", write_file)?;
 
-    // async.write(path, data) - Async binary file write
+    // async.write(path, data) - Async binary file write, returns handle
     let root_clone = root.clone();
+    let tracker_clone = tracker.clone();
     let write = lua.create_function(move |_, (path, data): (String, mlua::String)| {
         let resolved = resolve_path(&path, &root_clone);
         if sandbox && !is_path_within_root(&resolved, &root_clone) {
@@ -660,26 +1112,80 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             )));
         }
 
-        // Ensure parent directory exists
-        if let Some(parent) = resolved.parent() {
-            let parent = parent.to_path_buf();
-            block_on(async {
-                tokio::fs::create_dir_all(&parent).await.ok();
-            });
-        }
-
         let bytes = data.as_bytes().to_vec();
-        let result = block_on(async { tokio::fs::write(&resolved, &bytes).await });
+        let tracker = tracker_clone.clone();
 
-        match result {
-            Ok(()) => Ok(true),
-            Err(e) => Err(mlua::Error::RuntimeError(format!(
-                "Failed to write file '{}': {}",
-                path, e
-            ))),
-        }
+        let handle = runtime().spawn(async move {
+            // Ensure parent directory exists
+            if let Some(parent) = resolved.parent() {
+                tokio::fs::create_dir_all(parent).await.ok();
+            }
+
+            match tokio::fs::write(&resolved, &bytes).await {
+                Ok(()) => {
+                    // Track the write
+                    let canonical = resolved.canonicalize().unwrap_or(resolved);
+                    tracker.record_write(canonical, &bytes);
+                    Ok(IOResponse::Ok)
+                }
+                Err(e) => Err(format!("Failed to write file: {}", e)),
+            }
+        });
+
+        Ok(AsyncIOTask {
+            handle: Arc::new(Mutex::new(Some(handle))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        })
     })?;
     async_module.set("write", write)?;
+
+    // async.exists(path) - Async file/dir existence check, returns AsyncIOTask
+    let root_clone = root.clone();
+    let exists = lua.create_function(move |_lua, path: String| {
+        let resolved = resolve_path(&path, &root_clone);
+
+        let handle = runtime().spawn(async move {
+            let exists = tokio::fs::try_exists(&resolved).await.unwrap_or(false);
+            Ok(IOResponse::Bool(exists))
+        });
+
+        Ok(AsyncIOTask {
+            handle: Arc::new(Mutex::new(Some(handle))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        })
+    })?;
+    async_module.set("exists", exists)?;
+
+    // async.read_file(path) - Async file read, returns AsyncIOTask
+    let root_clone = root.clone();
+    let sandbox_clone = sandbox;
+    let read_file = lua.create_function(move |_lua, path: String| {
+        let resolved = resolve_path(&path, &root_clone);
+
+        // Check sandbox
+        if sandbox_clone && !is_path_within_root(&resolved, &root_clone) {
+            return Err(mlua::Error::RuntimeError(format!(
+                "Sandbox: cannot access '{}' outside project directory",
+                path
+            )));
+        }
+
+        let handle = runtime().spawn(async move {
+            match tokio::fs::read_to_string(&resolved).await {
+                Ok(content) => Ok(IOResponse::String(content)),
+                Err(e) => Err(format!("Failed to read file: {}", e)),
+            }
+        });
+
+        Ok(AsyncIOTask {
+            handle: Arc::new(Mutex::new(Some(handle))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        })
+    })?;
+    async_module.set("read_file", read_file)?;
 
     // async.read_files(paths) - Async batch file read
     let root_clone = root.clone();
@@ -756,8 +1262,9 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
     })?;
     async_module.set("load_json", load_json)?;
 
-    // async.copy_file(src, dst) - Async file copy
+    // async.copy_file(src, dst) - Async file copy, returns handle
     let root_clone = root.clone();
+    let tracker_clone = tracker.clone();
     let copy_file = lua.create_function(move |_, (src, dst): (String, String)| {
         let src_resolved = resolve_path(&src, &root_clone);
         let dst_resolved = resolve_path(&dst, &root_clone);
@@ -777,23 +1284,37 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             }
         }
 
-        // Ensure parent directory exists
-        if let Some(parent) = dst_resolved.parent() {
-            let parent = parent.to_path_buf();
-            block_on(async {
-                tokio::fs::create_dir_all(&parent).await.ok();
-            });
-        }
+        let tracker = tracker_clone.clone();
+        let handle = runtime().spawn(async move {
+            // Ensure parent directory exists
+            if let Some(parent) = dst_resolved.parent() {
+                tokio::fs::create_dir_all(parent).await.ok();
+            }
 
-        let result = block_on(async { tokio::fs::copy(&src_resolved, &dst_resolved).await });
+            // Read the source file content for tracking
+            let content = tokio::fs::read(&src_resolved).await;
 
-        match result {
-            Ok(bytes) => Ok(bytes),
-            Err(e) => Err(mlua::Error::RuntimeError(format!(
-                "Failed to copy '{}' to '{}': {}",
-                src, dst, e
-            ))),
-        }
+            match tokio::fs::copy(&src_resolved, &dst_resolved).await {
+                Ok(bytes) => {
+                    // Track the read and write
+                    if let Ok(ref content) = content {
+                        let src_canonical = src_resolved.canonicalize().unwrap_or(src_resolved);
+                        tracker.record_read(src_canonical, content);
+
+                        let dst_canonical = dst_resolved.canonicalize().unwrap_or(dst_resolved);
+                        tracker.record_write(dst_canonical, content);
+                    }
+                    Ok(IOResponse::Bytes(bytes))
+                }
+                Err(e) => Err(format!("Failed to copy: {}", e)),
+            }
+        });
+
+        Ok(AsyncIOTask {
+            handle: Arc::new(Mutex::new(Some(handle))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        })
     })?;
     async_module.set("copy_file", copy_file)?;
 
@@ -838,7 +1359,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
     })?;
     async_module.set("rename", rename)?;
 
-    // async.create_dir(path) - Async create directory (including parents)
+    // async.create_dir(path) - Async create directory (including parents), returns handle
     let root_clone = root.clone();
     let create_dir = lua.create_function(move |_, path: String| {
         let resolved = resolve_path(&path, &root_clone);
@@ -850,15 +1371,18 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
             )));
         }
 
-        let result = block_on(async { tokio::fs::create_dir_all(&resolved).await });
+        let handle = runtime().spawn(async move {
+            match tokio::fs::create_dir_all(&resolved).await {
+                Ok(()) => Ok(IOResponse::Ok),
+                Err(e) => Err(format!("Failed to create directory: {}", e)),
+            }
+        });
 
-        match result {
-            Ok(()) => Ok(true),
-            Err(e) => Err(mlua::Error::RuntimeError(format!(
-                "Failed to create directory '{}': {}",
-                path, e
-            ))),
-        }
+        Ok(AsyncIOTask {
+            handle: Arc::new(Mutex::new(Some(handle))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        })
     })?;
     async_module.set("create_dir", create_dir)?;
 

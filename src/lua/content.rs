@@ -1,7 +1,4 @@
-//! Content processing functions for Lua API
-//!
-//! Functions: render_markdown, rss_date, extract_links_markdown, extract_links_html,
-//!            html_to_text, extract_images_markdown, extract_images_html
+//! Content processing - render_markdown, html_to_text, rss_date, link/image extraction
 
 use super::markdown_context::{
     MarkdownContext, lua_table_to_event, set_tag_end_info, set_tag_info,

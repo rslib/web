@@ -147,40 +147,72 @@ async fn websocket_handler(
 /// Handle WebSocket connection
 async fn handle_socket(mut socket: WebSocket, state: Arc<ServerState>) {
     let mut rx = state.reload_tx.subscribe();
+    log::debug!(
+        "[WS] Client connected. Total receivers: {}",
+        state.reload_tx.receiver_count()
+    );
 
     loop {
         tokio::select! {
-            // Receive reload notifications
-            Ok(msg) = rx.recv() => {
-                let json = match msg {
-                    ReloadMessage::Reload => r#"{"type":"reload"}"#.to_string(),
-                    ReloadMessage::CssReload(path) => {
-                        format!(r#"{{"type":"css","path":"{}"}}"#, path)
-                    }
-                };
-                if socket.send(Message::Text(json.into())).await.is_err() {
-                    break;
-                }
-            }
-            // Handle incoming messages (ping/pong)
-            Some(Ok(msg)) = socket.recv() => {
+            biased;
+
+            // Handle incoming messages (ping/pong) - check this first
+            msg = socket.recv() => {
                 match msg {
-                    Message::Ping(data) => {
+                    Some(Ok(Message::Ping(data))) => {
                         if socket.send(Message::Pong(data)).await.is_err() {
                             break;
                         }
                     }
-                    Message::Close(_) => break,
-                    _ => {}
+                    Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Close(_))) => break,
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => {
+                        log::debug!("[WS] Receive error: {}", e);
+                        break;
+                    }
+                    None => {
+                        log::debug!("[WS] Connection closed by client");
+                        break;
+                    }
                 }
             }
-            else => break,
+
+            // Receive reload notifications
+            result = rx.recv() => {
+                match result {
+                    Ok(msg) => {
+                        let json = match msg {
+                            ReloadMessage::Reload => r#"{"type":"reload"}"#.to_string(),
+                            ReloadMessage::CssReload(path) => {
+                                format!(r#"{{"type":"css","path":"{}"}}"#, path)
+                            }
+                        };
+                        log::debug!("[WS] Sending: {}", json);
+                        if socket.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        log::debug!("[WS] Broadcast recv error: {}", e);
+                    }
+                }
+            }
         }
     }
+    log::debug!(
+        "[WS] Client disconnected. Remaining receivers: {}",
+        state.reload_tx.receiver_count()
+    );
 }
 
 /// Middleware to inject live reload script into HTML responses
 async fn inject_live_reload(request: Request<Body>, next: axum::middleware::Next) -> Response {
+    // Skip for WebSocket upgrade requests
+    if request.headers().contains_key(header::UPGRADE) {
+        return next.run(request).await;
+    }
+
     let response = next.run(request).await;
 
     // Check if response is HTML
@@ -229,6 +261,43 @@ pub struct ServerConfig {
     pub output_dir: PathBuf,
 }
 
+/// Try to bind to a port, returns the listener and actual port used
+async fn try_bind(
+    host: &str,
+    start_port: u16,
+    max_attempts: u16,
+) -> anyhow::Result<(tokio::net::TcpListener, u16)> {
+    for offset in 0..max_attempts {
+        let port = start_port + offset;
+        let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
+
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => {
+                if offset > 0 {
+                    rs_print!(
+                        "⚠ Port {} in use, using port {} instead (another rs-web may be running)",
+                        start_port,
+                        port
+                    );
+                }
+                return Ok((listener, port));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                continue;
+            }
+            Err(e) => {
+                return Err(e.into());
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "Could not find available port (tried {} to {})",
+        start_port,
+        start_port + max_attempts - 1
+    )
+}
+
 /// Run the development server
 pub async fn run_server(config: ServerConfig) -> anyhow::Result<broadcast::Sender<ReloadMessage>> {
     let (reload_tx, _) = broadcast::channel::<ReloadMessage>(16);
@@ -240,17 +309,16 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<broadcast::Sende
 
     let app = create_router(state);
 
-    let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
+    // Try to find an available port (up to 10 attempts)
+    let (listener, actual_port) = try_bind(&config.host, config.port, 10).await?;
 
-    println!(
+    rs_print!(
         "Development server running at http://{}:{}",
-        config.host, config.port
+        config.host,
+        actual_port
     );
-    println!("Serving: {}", config.output_dir.display());
-    println!("Live reload: enabled");
-    println!();
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    rs_print!("Serving: {}", config.output_dir.display());
+    rs_print!("Live reload: enabled");
 
     tokio::spawn(async move {
         axum::serve(listener, app).await.ok();
@@ -262,9 +330,9 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<broadcast::Sende
 /// Notify clients to reload
 pub fn notify_reload(tx: &broadcast::Sender<ReloadMessage>, message: ReloadMessage) {
     let receivers = tx.receiver_count();
-    log::debug!("Sending reload message to {} connected clients", receivers);
+    log::debug!("Sending reload to {} receivers", receivers);
     match tx.send(message) {
-        Ok(n) => log::debug!("Reload message sent to {} receivers", n),
-        Err(e) => log::warn!("Failed to send reload message: {}", e),
+        Ok(n) => log::debug!("Sent to {} receivers", n),
+        Err(e) => log::debug!("No receivers for reload message: {}", e),
     }
 }

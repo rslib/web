@@ -1,6 +1,4 @@
-//! Encryption functions for Lua API
-//!
-//! Functions: crypt.encrypt, crypt.decrypt, crypt.encrypt_html
+//! Encryption (rs.crypt) - encrypt, decrypt, encrypt_html
 
 use crate::encryption::encrypt_content;
 use aes_gcm::{

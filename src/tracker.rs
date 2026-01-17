@@ -45,10 +45,23 @@ pub struct MemoKey {
     pub input_hash: u64,
 }
 
+/// Asset reference extracted from HTML (script src, link href, img src, etc.)
+#[derive(Debug, Clone)]
+pub struct AssetRef {
+    /// The URL path as it appears in HTML (e.g., "/js/editor.js")
+    pub url_path: String,
+    /// The source file path if known (e.g., "static/js/editor.js")
+    pub source_path: Option<PathBuf>,
+}
+
 #[derive(Debug)]
 pub struct BuildTracker {
     reads: Mutex<HashMap<PathBuf, FileState>>,
     writes: Mutex<HashMap<PathBuf, FileState>>,
+    /// Maps output page path -> asset references found in its HTML
+    html_refs: Mutex<HashMap<PathBuf, Vec<AssetRef>>>,
+    /// Maps source asset path -> output pages that reference it
+    asset_to_pages: Mutex<HashMap<PathBuf, Vec<PathBuf>>>,
     memo: DashMap<MemoKey, Vec<u8>>,
     enabled: bool,
 }
@@ -64,6 +77,8 @@ impl BuildTracker {
         Self {
             reads: Mutex::new(HashMap::new()),
             writes: Mutex::new(HashMap::new()),
+            html_refs: Mutex::new(HashMap::new()),
+            asset_to_pages: Mutex::new(HashMap::new()),
             memo: DashMap::new(),
             enabled: true,
         }
@@ -73,6 +88,8 @@ impl BuildTracker {
         Self {
             reads: Mutex::new(HashMap::new()),
             writes: Mutex::new(HashMap::new()),
+            html_refs: Mutex::new(HashMap::new()),
+            asset_to_pages: Mutex::new(HashMap::new()),
             memo: DashMap::new(),
             enabled: false,
         }
@@ -190,7 +207,54 @@ impl BuildTracker {
         LOCAL_WRITES.with(|w| w.borrow_mut().clear());
         self.reads.lock().clear();
         self.writes.lock().clear();
+        self.html_refs.lock().clear();
+        self.asset_to_pages.lock().clear();
         self.memo.clear();
+    }
+
+    /// Record HTML asset references for a rendered page
+    pub fn record_html_refs(&self, page_path: PathBuf, refs: Vec<AssetRef>) {
+        if !self.enabled || refs.is_empty() {
+            return;
+        }
+        let mut html_refs = self.html_refs.lock();
+        let mut asset_to_pages = self.asset_to_pages.lock();
+
+        // Build reverse mapping
+        for asset_ref in &refs {
+            if let Some(ref source) = asset_ref.source_path {
+                asset_to_pages
+                    .entry(source.clone())
+                    .or_default()
+                    .push(page_path.clone());
+            }
+        }
+
+        html_refs.insert(page_path, refs);
+    }
+
+    /// Get pages that reference a given asset (by source path)
+    pub fn get_pages_for_asset(&self, asset_path: &PathBuf) -> Vec<PathBuf> {
+        self.asset_to_pages
+            .lock()
+            .get(asset_path)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Check if an asset is referenced by any page
+    pub fn is_asset_referenced(&self, asset_path: &PathBuf) -> bool {
+        self.asset_to_pages.lock().contains_key(asset_path)
+    }
+
+    /// Get all HTML refs
+    pub fn get_html_refs(&self) -> HashMap<PathBuf, Vec<AssetRef>> {
+        self.html_refs.lock().clone()
+    }
+
+    /// Get reverse mapping of assets to pages
+    pub fn get_asset_to_pages(&self) -> HashMap<PathBuf, Vec<PathBuf>> {
+        self.asset_to_pages.lock().clone()
     }
 
     pub fn get_changed_files(&self, cached: &CachedDeps) -> Vec<PathBuf> {
@@ -222,6 +286,9 @@ impl BuildTracker {
 pub struct CachedDeps {
     pub reads: HashMap<PathBuf, FileState>,
     pub writes: HashMap<PathBuf, FileState>,
+    /// Maps source asset path -> output pages that reference it
+    #[serde(default)]
+    pub asset_to_pages: HashMap<PathBuf, Vec<PathBuf>>,
 }
 
 impl CachedDeps {
@@ -229,6 +296,7 @@ impl CachedDeps {
         Self {
             reads: tracker.get_reads(),
             writes: tracker.get_writes(),
+            asset_to_pages: tracker.get_asset_to_pages(),
         }
     }
 
@@ -254,6 +322,108 @@ pub fn hash_content(content: &[u8]) -> u64 {
 
 pub fn hash_str(s: &str) -> u64 {
     hash_content(s.as_bytes())
+}
+
+/// Extract asset references from HTML content.
+/// Looks for: script src, link href, img src, video src, audio src, source src
+pub fn extract_html_asset_refs(html: &str) -> Vec<String> {
+    use regex::Regex;
+    use std::sync::LazyLock;
+
+    static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+        vec![
+            // <script src="...">
+            Regex::new(r#"<script[^>]+src=["']([^"']+)["']"#).unwrap(),
+            // <link href="..."> (for CSS)
+            Regex::new(r#"<link[^>]+href=["']([^"']+)["']"#).unwrap(),
+            // <img src="...">
+            Regex::new(r#"<img[^>]+src=["']([^"']+)["']"#).unwrap(),
+            // <video src="...">
+            Regex::new(r#"<video[^>]+src=["']([^"']+)["']"#).unwrap(),
+            // <audio src="...">
+            Regex::new(r#"<audio[^>]+src=["']([^"']+)["']"#).unwrap(),
+            // <source src="...">
+            Regex::new(r#"<source[^>]+src=["']([^"']+)["']"#).unwrap(),
+            // CSS url(...)
+            Regex::new(r#"url\(["']?([^"')]+)["']?\)"#).unwrap(),
+        ]
+    });
+
+    let mut refs = Vec::new();
+    for pattern in PATTERNS.iter() {
+        for cap in pattern.captures_iter(html) {
+            if let Some(path) = cap.get(1) {
+                let path = path.as_str();
+                // Only include local paths (starting with / but not //)
+                if path.starts_with('/') && !path.starts_with("//") {
+                    refs.push(path.to_string());
+                }
+            }
+        }
+    }
+    refs.sort();
+    refs.dedup();
+    refs
+}
+
+/// Extract image references from markdown content
+/// Looks for: ![alt](url) and ![alt](url "title")
+pub fn extract_markdown_asset_refs(markdown: &str) -> Vec<String> {
+    use regex::Regex;
+    use std::sync::LazyLock;
+
+    static IMG_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+        // ![alt](url) or ![alt](url "title")
+        Regex::new(r#"!\[[^\]]*\]\(([^)"'\s]+)"#).unwrap()
+    });
+
+    let mut refs = Vec::new();
+    for cap in IMG_PATTERN.captures_iter(markdown) {
+        if let Some(path) = cap.get(1) {
+            let path = path.as_str();
+            // Only include local paths
+            if path.starts_with('/') && !path.starts_with("//") {
+                refs.push(path.to_string());
+            }
+        }
+    }
+    refs.sort();
+    refs.dedup();
+    refs
+}
+
+/// Map a URL path (e.g., "/js/editor.js") to a source path (e.g., "static/js/editor.js")
+/// Uses the writes map to find what source file produced the output
+pub fn resolve_url_to_source(
+    url_path: &str,
+    output_dir: &std::path::Path,
+    writes: &HashMap<PathBuf, FileState>,
+    project_dir: &std::path::Path,
+) -> Option<PathBuf> {
+    // Convert URL path to output file path
+    // e.g., "/js/editor.js" -> "{output_dir}/js/editor.js"
+    let url_path = url_path.trim_start_matches('/');
+    let output_path = output_dir.join(url_path);
+    let output_canonical = output_path.canonicalize().ok()?;
+
+    // Check if this output was written during the build
+    if writes.contains_key(&output_canonical) {
+        // Try common source mappings:
+        // 1. static/{path} -> {output_dir}/{path}
+        // 2. {path} -> {output_dir}/{path}
+        let candidates = [
+            project_dir.join("static").join(url_path),
+            project_dir.join(url_path),
+        ];
+
+        for candidate in candidates {
+            if candidate.exists() {
+                return candidate.canonicalize().ok();
+            }
+        }
+    }
+
+    None
 }
 
 pub type SharedTracker = Arc<BuildTracker>;

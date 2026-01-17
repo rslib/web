@@ -1,6 +1,4 @@
-//! Image processing functions for Lua API
-//!
-//! Functions: image_dimensions, image_resize, image_convert, image_optimize
+//! Image processing - image_dimensions, image_resize, image_convert, image_optimize
 
 use crate::tracker::SharedTracker;
 use image::DynamicImage;

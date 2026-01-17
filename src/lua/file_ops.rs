@@ -1,7 +1,4 @@
-//! File operation functions for Lua API
-//!
-//! Functions: load_json, load_yaml, load_toml, read_frontmatter, read_file,
-//!            file_exists, list_files, list_dirs, write_file, copy_file
+//! File operations - load_json/yaml/toml, read_file, write_file, copy_file, etc.
 
 use super::helpers::{is_path_within_root, parse_frontmatter_content, resolve_path};
 use crate::tracker::SharedTracker;

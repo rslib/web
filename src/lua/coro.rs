@@ -1,6 +1,4 @@
-//! Coroutine helpers for Lua API
-//!
-//! Functions: coro.task, coro.await, coro.yield, coro.all, coro.race, coro.sleep
+//! Coroutine helpers (rs.coro) - task, await, yield, all, race
 
 use mlua::{Lua, Result, Table};
 

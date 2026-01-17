@@ -1,8 +1,4 @@
-//! Lua API functions for rs-web
-//!
-//! This module provides all Lua functions available in config.lua,
-//! organized by category for maintainability.
-//!
+//! Lua API for rs-web
 //! Usage in Lua:
 //! ```lua
 //! local rs = require("rs-web")
@@ -90,7 +86,7 @@ pub fn register(
     let parallel_module = parallel::create_module(lua, &root, sandbox, tracker.clone())?;
     rs_module.set("parallel", parallel_module)?;
 
-    let async_module = async_io::create_module(lua, &root, sandbox)?;
+    let async_module = async_io::create_module(lua, &root, sandbox, tracker.clone())?;
     // Use raw_set to avoid "async" being a reserved word in some contexts
     rs_module.raw_set("async", async_module)?;
 

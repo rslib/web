@@ -1,6 +1,4 @@
-//! Search functions for Lua API
-//!
-//! Functions: glob, scan
+//! Search functions - glob, scan
 
 use super::helpers::{is_path_within_root, resolve_path};
 use mlua::{Lua, Result, Table};
