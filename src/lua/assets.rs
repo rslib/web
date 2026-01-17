@@ -1,10 +1,9 @@
-//! Asset processing module - build_css, download_google_font
+//! Asset processing module - build_css, build_js, download_google_font
 
-use crate::lua::async_io::CacheOption;
+use crate::lua::async_io::{AsyncIOTask, CacheOption, runtime};
 use crate::tracker::SharedTracker;
 use mlua::{Lua, Result, Table, Value};
 use regex::Regex;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Register asset processing functions on the module table
@@ -16,9 +15,7 @@ pub fn register(
 ) -> Result<()> {
     let root = project_root.to_path_buf();
 
-    // build_css(paths_or_pattern, output_path, options?) - Build and concatenate CSS files
-    // paths_or_pattern: glob pattern like "styles/*.css" OR array of paths {"a.css", "b.css"}
-    // options: { minify?: boolean }
+    // build_css(paths_or_pattern, output_path, options?) - async
     let root_clone = root.clone();
     let tracker_clone = tracker.clone();
     let build_css_fn = lua.create_function(
@@ -28,116 +25,77 @@ pub fn register(
                 .and_then(|t| t.get::<bool>("minify").ok())
                 .unwrap_or(false);
 
-            // Collect CSS files based on input type
-            let css_files: Vec<PathBuf> = match input {
-                // Array of paths
-                Value::Table(table) => {
-                    let mut files = Vec::new();
-                    for pair in table.pairs::<i64, String>() {
-                        let (_, path_str) = pair.map_err(|e| {
-                            mlua::Error::external(format!("Invalid path in array: {}", e))
-                        })?;
-                        let path = if Path::new(&path_str).is_absolute() {
-                            PathBuf::from(&path_str)
-                        } else {
-                            root_clone.join(&path_str)
-                        };
-                        if path.exists() && path.is_file() {
-                            files.push(path);
-                        } else {
-                            return Err(mlua::Error::external(format!(
-                                "CSS file not found: {}",
-                                path_str
-                            )));
-                        }
-                    }
-                    files
-                }
-                // Glob pattern
-                Value::String(pattern_str) => {
-                    let pattern = pattern_str
-                        .to_str()
-                        .map_err(|e| {
-                            mlua::Error::external(format!("Invalid pattern string: {}", e))
-                        })?
-                        .to_string();
-                    let glob_pattern = if Path::new(&pattern).is_absolute() {
-                        pattern.clone()
-                    } else {
-                        root_clone.join(&pattern).to_string_lossy().to_string()
-                    };
-
-                    let mut files: Vec<PathBuf> = glob::glob(&glob_pattern)
-                        .map_err(|e| mlua::Error::external(format!("Invalid glob pattern: {}", e)))?
-                        .filter_map(|entry| entry.ok())
-                        .filter(|path| path.is_file())
-                        .collect();
-
-                    // Sort alphabetically for consistent ordering (only for glob)
-                    files.sort();
-                    files
-                }
-                _ => {
-                    return Err(mlua::Error::external(
-                        "build_css: first argument must be a glob pattern string or array of paths",
-                    ));
-                }
-            };
-
-            if css_files.is_empty() {
+            let files = collect_files(&input, &root_clone, "css")?;
+            if files.is_empty() {
                 return Err(mlua::Error::external("No CSS files found"));
             }
 
-            // Read and concatenate files, tracking each read
-            let mut css_buffer = String::new();
-            for path in &css_files {
-                let content = fs::read_to_string(path).map_err(|e| {
-                    mlua::Error::external(format!("Failed to read {:?}: {}", path, e))
-                })?;
+            let output = resolve_output_path(&output_path, &root_clone);
+            let tracker = tracker_clone.clone();
 
-                let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-                tracker_clone.record_read(canonical, content.as_bytes());
+            let handle = runtime().spawn(async move {
+                // Read files concurrently
+                let contents = read_files_async(&files, &tracker).await?;
+                let buffer: String = contents.join("\n");
 
-                if !css_buffer.is_empty() {
-                    css_buffer.push('\n');
-                }
-                css_buffer.push_str(&content);
-            }
+                // Minify in blocking task (CPU-bound)
+                let output_content = if minify {
+                    tokio::task::spawn_blocking(move || {
+                        minifier::css::minify(&buffer)
+                            .map(|m| m.to_string())
+                            .map_err(|e| format!("CSS minification failed: {}", e))
+                    })
+                    .await
+                    .map_err(|e| e.to_string())??
+                } else {
+                    buffer
+                };
 
-            // Minify if requested
-            let output_content = if minify {
-                minifier::css::minify(&css_buffer)
-                    .map_err(|e| mlua::Error::external(format!("CSS minification failed: {}", e)))?
-                    .to_string()
-            } else {
-                css_buffer
-            };
+                write_output_async(&output, &output_content, &tracker).await
+            });
 
-            // Resolve output path
-            let output = if Path::new(&output_path).is_absolute() {
-                PathBuf::from(&output_path)
-            } else {
-                root_clone.join(&output_path)
-            };
-
-            // Ensure parent directory exists
-            if let Some(parent) = output.parent() {
-                fs::create_dir_all(parent).map_err(|e| {
-                    mlua::Error::external(format!("Failed to create directory: {}", e))
-                })?;
-            }
-
-            fs::write(&output, &output_content)
-                .map_err(|e| mlua::Error::external(format!("Failed to write CSS: {}", e)))?;
-
-            // Track the write (canonicalize for consistent path matching)
-            let canonical = output.canonicalize().unwrap_or(output);
-            tracker_clone.record_write(canonical, output_content.as_bytes());
-
-            Ok(Value::Boolean(true))
+            Ok(AsyncIOTask::new(handle))
         },
     )?;
     module.set("build_css", build_css_fn)?;
+
+    // build_js(paths_or_pattern, output_path, options?) - async
+    let root_clone = root.clone();
+    let tracker_clone = tracker.clone();
+    let build_js_fn = lua.create_function(
+        move |_lua, (input, output_path, options): (Value, String, Option<Table>)| {
+            let minify: bool = options
+                .as_ref()
+                .and_then(|t| t.get::<bool>("minify").ok())
+                .unwrap_or(false);
+
+            let files = collect_files(&input, &root_clone, "js")?;
+            if files.is_empty() {
+                return Err(mlua::Error::external("No JS files found"));
+            }
+
+            let output = resolve_output_path(&output_path, &root_clone);
+            let tracker = tracker_clone.clone();
+
+            let handle = runtime().spawn(async move {
+                let contents = read_files_async(&files, &tracker).await?;
+                let buffer: String = contents.join("\n");
+
+                let output_content = if minify {
+                    tokio::task::spawn_blocking(move || minify_js(&buffer))
+                        .await
+                        .map_err(|e| e.to_string())??
+                } else {
+                    buffer
+                };
+
+                write_output_async(&output, &output_content, &tracker).await
+            });
+
+            Ok(AsyncIOTask::new(handle))
+        },
+    )?;
+    module.set("build_js", build_js_fn)?;
 
     // download_google_font(family, options) - Download Google Font files (async, returns handle)
     // options: { fonts_dir, css_path, css_prefix?, weights?, display?, cache? }
@@ -177,6 +135,13 @@ pub fn register(
             let display: String = options
                 .get::<String>("display")
                 .unwrap_or_else(|_| "swap".to_string());
+
+            // Optional: minify CSS output (default: true)
+            let minify: bool = options
+                .get::<Option<bool>>("minify")
+                .ok()
+                .flatten()
+                .unwrap_or(true);
 
             // Optional: cache (bool or string path), defaults to true
             let cache_option = match options.get::<Value>("cache") {
@@ -229,6 +194,7 @@ pub fn register(
 
             let project_root = root_clone.clone();
             let tracker = tracker.clone();
+            let minify_css = minify;
 
             // Spawn async task that does all the work
             let handle = runtime().spawn(async move {
@@ -344,14 +310,23 @@ pub fn register(
                         .map_err(|e| format!("Failed to create CSS directory: {}", e))?;
                 }
 
+                // Minify CSS if requested (default: true)
+                let final_css = if minify_css {
+                    minifier::css::minify(&local_css)
+                        .map(|m| m.to_string())
+                        .unwrap_or_else(|_| local_css.clone())
+                } else {
+                    local_css
+                };
+
                 // Write CSS file
-                tokio::fs::write(&css_path, &local_css)
+                tokio::fs::write(&css_path, &final_css)
                     .await
                     .map_err(|e| format!("Failed to write CSS: {}", e))?;
 
                 // Track the CSS write
                 let canonical = css_path.canonicalize().unwrap_or(css_path.clone());
-                tracker.record_write(canonical, local_css.as_bytes());
+                tracker.record_write(canonical, final_css.as_bytes());
 
                 log::info!("Saved CSS for {} to {:?}", family, css_path);
 
@@ -437,10 +412,8 @@ async fn fetch_google_fonts_css_async(
 
 /// Extract filename from Google Fonts URL
 fn extract_font_filename(url: &str) -> Option<String> {
-    // Try woff2 first, then ttf
     if let Some(pos) = url.rfind('/') {
         let path = &url[pos + 1..];
-        // Find .woff2 or .ttf extension
         if let Some(ext_pos) = path.find(".woff2") {
             return Some(path[..ext_pos + 6].to_string());
         }
@@ -452,4 +425,229 @@ fn extract_font_filename(url: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Collect files from input (glob pattern or array of paths)
+fn collect_files(input: &Value, root: &Path, ext: &str) -> mlua::Result<Vec<PathBuf>> {
+    match input {
+        Value::Table(table) => {
+            let mut files = Vec::new();
+            for pair in table.pairs::<i64, String>() {
+                let (_, path_str) = pair
+                    .map_err(|e| mlua::Error::external(format!("Invalid path in array: {}", e)))?;
+                let path = if Path::new(&path_str).is_absolute() {
+                    PathBuf::from(&path_str)
+                } else {
+                    root.join(&path_str)
+                };
+                if path.exists() && path.is_file() {
+                    files.push(path);
+                } else {
+                    return Err(mlua::Error::external(format!(
+                        "{} file not found: {}",
+                        ext.to_uppercase(),
+                        path_str
+                    )));
+                }
+            }
+            Ok(files)
+        }
+        Value::String(pattern_str) => {
+            let pattern = pattern_str
+                .to_str()
+                .map_err(|e| mlua::Error::external(format!("Invalid pattern: {}", e)))?
+                .to_string();
+            let glob_pattern = if Path::new(&pattern).is_absolute() {
+                pattern.clone()
+            } else {
+                root.join(&pattern).to_string_lossy().to_string()
+            };
+
+            let mut files: Vec<PathBuf> = glob::glob(&glob_pattern)
+                .map_err(|e| mlua::Error::external(format!("Invalid glob: {}", e)))?
+                .filter_map(|e| e.ok())
+                .filter(|p| p.is_file())
+                .collect();
+            files.sort();
+            Ok(files)
+        }
+        _ => Err(mlua::Error::external(format!(
+            "build_{}: first argument must be glob pattern or array of paths",
+            ext
+        ))),
+    }
+}
+
+fn resolve_output_path(output_path: &str, root: &Path) -> PathBuf {
+    if Path::new(output_path).is_absolute() {
+        PathBuf::from(output_path)
+    } else {
+        root.join(output_path)
+    }
+}
+
+async fn read_files_async(
+    files: &[PathBuf],
+    tracker: &SharedTracker,
+) -> std::result::Result<Vec<String>, String> {
+    let futures: Vec<_> = files
+        .iter()
+        .map(|path| {
+            let path = path.clone();
+            let tracker = tracker.clone();
+            async move {
+                let content = tokio::fs::read_to_string(&path)
+                    .await
+                    .map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
+                let canonical = path.canonicalize().unwrap_or(path);
+                tracker.record_read(canonical, content.as_bytes());
+                Ok::<_, String>(content)
+            }
+        })
+        .collect();
+
+    let results = futures::future::join_all(futures).await;
+    results.into_iter().collect()
+}
+
+async fn write_output_async(
+    output: &Path,
+    content: &str,
+    tracker: &SharedTracker,
+) -> std::result::Result<(), String> {
+    if let Some(parent) = output.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+
+    tokio::fs::write(output, content)
+        .await
+        .map_err(|e| format!("Failed to write: {}", e))?;
+
+    let canonical = output
+        .canonicalize()
+        .unwrap_or_else(|_| output.to_path_buf());
+    tracker.record_write(canonical, content.as_bytes());
+    Ok(())
+}
+
+/// Minify JavaScript using OXC (with dead code elimination)
+fn minify_js(source: &str) -> std::result::Result<String, String> {
+    use oxc_allocator::Allocator;
+    use oxc_codegen::{Codegen, CodegenOptions};
+    use oxc_minifier::{CompressOptions, MangleOptions, Minifier, MinifierOptions};
+    use oxc_parser::Parser;
+    use oxc_span::SourceType;
+
+    let allocator = Allocator::default();
+    let source_type = SourceType::mjs();
+    let ret = Parser::new(&allocator, source, source_type).parse();
+
+    if !ret.errors.is_empty() {
+        return Err(ret
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("; "));
+    }
+
+    let mut program = ret.program;
+    let options = MinifierOptions {
+        mangle: Some(MangleOptions::default()),
+        compress: Some(CompressOptions::default()),
+    };
+
+    Minifier::new(options).minify(&allocator, &mut program);
+
+    let code = Codegen::new()
+        .with_options(CodegenOptions::minify())
+        .build(&program)
+        .code;
+    Ok(code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_minify_js_basic() {
+        let input = r#"
+            function hello(name) {
+                console.log("Hello, " + name);
+            }
+        "#;
+        let result = minify_js(input).unwrap();
+        assert!(!result.contains('\n'));
+        assert!(result.len() < input.len());
+    }
+
+    #[test]
+    fn test_minify_js_removes_whitespace() {
+        let input = "const   x   =   1;";
+        let result = minify_js(input).unwrap();
+        assert!(!result.contains("   "));
+    }
+
+    #[test]
+    fn test_minify_js_boolean_compression() {
+        // Use console.log to prevent DCE from removing the values
+        let input = "console.log(true, false);";
+        let result = minify_js(input).unwrap();
+        // OXC compresses true to !0 and false to !1
+        assert!(
+            result.contains("!0") || result.contains("!1") || result.contains("true"),
+            "Result: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_minify_js_dead_code_elimination() {
+        let input = r#"
+            function used() { return 1; }
+            function unused() { return 2; }
+            console.log(used());
+        "#;
+        let result = minify_js(input).unwrap();
+        // DCE should remove unused function
+        assert!(
+            !result.contains("unused"),
+            "Result should not contain 'unused': {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_minify_js_parse_error() {
+        let input = "function { invalid syntax";
+        let result = minify_js(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_minify_js_preserves_strings() {
+        // Use console.log to prevent DCE
+        let input = r#"console.log("Hello World");"#;
+        let result = minify_js(input).unwrap();
+        assert!(
+            result.contains("Hello World"),
+            "Expected 'Hello World' in result: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_minify_js_template_literals() {
+        // Use console.log to prevent DCE
+        let input = "console.log(`hello world`);";
+        let result = minify_js(input).unwrap();
+        assert!(
+            result.contains("hello") && result.contains("world"),
+            "Result: {}",
+            result
+        );
+    }
 }

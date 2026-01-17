@@ -225,6 +225,15 @@ pub static LUA_CLASSES: &[LuaClass] = &[
         }],
     },
     LuaClass {
+        name: "BuildJsOptions",
+        description: "Options for build_js",
+        fields: &[LuaField {
+            name: "minify",
+            typ: "boolean?",
+            description: "Minify output JS with dead code elimination (default: false)",
+        }],
+    },
+    LuaClass {
         name: "GoogleFontOptions",
         description: "Options for download_google_font",
         fields: &[
@@ -257,6 +266,11 @@ pub static LUA_CLASSES: &[LuaClass] = &[
                 name: "cache",
                 typ: "boolean|string?",
                 description: "Enable caching: true (auto), string (explicit path), false (disabled). Default: true",
+            },
+            LuaField {
+                name: "minify",
+                typ: "boolean?",
+                description: "Minify CSS output (default: true)",
             },
         ],
     },
@@ -1327,7 +1341,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "build_css",
         module: None,
-        description: "Build and concatenate CSS files from glob pattern or array of paths",
+        description: "Build and concatenate CSS files from glob pattern or array of paths (async)",
         params: &[
             LuaParam {
                 name: "paths_or_pattern",
@@ -1348,7 +1362,33 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
                 optional: true,
             },
         ],
-        returns: "boolean",
+        returns: "AsyncIOTask",
+    },
+    LuaFunction {
+        name: "build_js",
+        module: None,
+        description: "Build and concatenate JS files with minification and dead code elimination (async)",
+        params: &[
+            LuaParam {
+                name: "paths_or_pattern",
+                typ: "string|string[]",
+                description: "Glob pattern (e.g., 'scripts/*.js') or array of file paths",
+                optional: false,
+            },
+            LuaParam {
+                name: "output_path",
+                typ: "string",
+                description: "Output file path",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "BuildJsOptions",
+                description: "Build options (minify)",
+                optional: true,
+            },
+        ],
+        returns: "AsyncIOTask",
     },
     LuaFunction {
         name: "check_unused_assets",
@@ -2596,7 +2636,12 @@ pub fn generate_markdown() -> String {
         ),
         (
             "Assets",
-            vec!["build_css", "check_unused_assets", "download_google_font"],
+            vec![
+                "build_css",
+                "build_js",
+                "check_unused_assets",
+                "download_google_font",
+            ],
         ),
     ];
 

@@ -8,6 +8,7 @@
 //! - **RSS feed** generation with section filtering
 //! - **Parallel processing** for fast builds
 //! - **Live reload** with automatic browser refresh during watch mode
+//! - **Asset minification** for CSS, JS (with dead code elimination), and HTML
 //!
 //! ## Quick Start
 //!
@@ -55,7 +56,7 @@
 //!   pages = function()
 //!     return {
 //!       { path = "/", template = "home.html", title = "Home" },
-//!       { path = "/about/", template = "page.html", title = "About" },
+//!       { path = "/about/", template = "page.html", title = "About", minify = true },
 //!     }
 //!   end,
 //!
@@ -112,8 +113,9 @@
 //! - `image_optimize(input, output, options?)` - Optimize/compress image
 //!
 //! **Asset Building:**
-//! - `build_css(pattern, output, options?)` - Build and concatenate CSS files
-//! - `download_google_font(family, options)` - Download Google Font (async)
+//! - `build_css(pattern, output, options?)` - Build and concatenate CSS files (async)
+//! - `build_js(pattern, output, options?)` - Build and concatenate JS files with minification and DCE (async)
+//! - `download_google_font(family, options)` - Download Google Font with optional CSS minification (async)
 //!
 //! **Text Processing:**
 //! - `slugify(text)` - Convert text to URL-friendly slug

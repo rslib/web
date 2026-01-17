@@ -116,6 +116,13 @@ pub struct PageDef {
     /// Page-specific data (available as ctx.page.data.*)
     #[serde(default)]
     pub data: Option<serde_json::Value>,
+    /// Whether to minify HTML output (default: true)
+    #[serde(default = "default_minify")]
+    pub minify: bool,
+}
+
+fn default_minify() -> bool {
+    true
 }
 
 impl Config {

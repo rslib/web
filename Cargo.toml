@@ -45,6 +45,16 @@ kamadak-exif = "0.5"
 # CSS minification
 minifier = "0.3"
 
+# HTML minification
+minify-html = "0.16"
+
+# JS minification (with DCE)
+oxc_allocator = "0.108"
+oxc_parser = "0.108"
+oxc_minifier = "0.108"
+oxc_codegen = "0.108"
+oxc_span = "0.108"
+
 # File operations
 walkdir = "2.5"
 ignore = "0.4"

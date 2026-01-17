@@ -9,6 +9,7 @@ A fast, opinionated static site generator built in Rust with support for:
 - RSS feed generation with section filtering
 - Parallel processing for fast builds
 - Live reload with automatic browser refresh during watch mode
+- Asset minification for CSS, JS (with dead code elimination), and HTML
 
 ## Installation
 
@@ -99,7 +100,7 @@ return {
   pages = function()
     return {
       { path = "/", template = "home.html", title = "Home" },
-      { path = "/about/", template = "page.html", title = "About" },
+      { path = "/about/", template = "page.html", title = "About", minify = true },
     }
   end,
 
@@ -175,9 +176,10 @@ Available in `config.lua`:
 
 | Function | Description |
 |----------|-------------|
-| `build_css(paths_or_pattern, output, options?)` | Build and concatenate CSS files (accepts glob pattern or array of paths) |
+| `build_css(paths_or_pattern, output, options?)` | Build and concatenate CSS files with optional minification (async, returns handle) |
+| `build_js(paths_or_pattern, output, options?)` | Build and concatenate JS files with minification and dead code elimination (async, returns handle) |
 | `check_unused_assets(output_dir)` | Find assets not referenced in HTML output |
-| `download_google_font(family, options)` | Download Google Font files and generate local CSS (async, returns handle) |
+| `download_google_font(family, options)` | Download Google Font files and generate local CSS with optional minification (async, returns handle) |
 
 **Text Processing:**
 

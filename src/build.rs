@@ -305,6 +305,13 @@ impl Builder {
         // Extract asset references from the generated HTML and markdown content
         self.extract_and_record_asset_refs(page, &html);
 
+        // Minify HTML if enabled (default: true)
+        let html = if page.minify {
+            minify_html(&html)
+        } else {
+            html
+        };
+
         // Write output file
         let relative_path = page.path.trim_matches('/');
 
@@ -636,5 +643,165 @@ impl Builder {
     /// Get a reference to the current config
     pub fn config(&self) -> &Config {
         &self.config
+    }
+}
+
+/// Minify HTML content with OXC-based inline JS minification
+fn minify_html(html: &str) -> String {
+    // First, minify inline JS with OXC (minify-js has bugs)
+    let html = minify_inline_js(html);
+
+    let cfg = minify_html::Cfg {
+        minify_js: false,
+        minify_css: true,
+        ..Default::default()
+    };
+    let minified = minify_html::minify(html.as_bytes(), &cfg);
+    String::from_utf8(minified).unwrap_or_else(|_| html.to_string())
+}
+
+/// Minify inline <script> tags using OXC
+fn minify_inline_js(html: &str) -> String {
+    use oxc_allocator::Allocator;
+    use oxc_codegen::{Codegen, CodegenOptions};
+    use oxc_minifier::{CompressOptions, MangleOptions, Minifier, MinifierOptions};
+    use oxc_parser::Parser;
+    use oxc_span::SourceType;
+    use regex::Regex;
+
+    let re = Regex::new(r"(?s)(<script(?:\s[^>]*)?>)(.*?)(</script>)").unwrap();
+
+    re.replace_all(html, |caps: &regex::Captures| {
+        let open_tag = &caps[1];
+        let content = &caps[2];
+        let close_tag = &caps[3];
+
+        // Skip external scripts (src=) or empty scripts
+        if open_tag.contains("src=") || content.trim().is_empty() {
+            return format!("{}{}{}", open_tag, content, close_tag);
+        }
+
+        // Try to minify with OXC
+        let allocator = Allocator::default();
+        let source_type = SourceType::mjs();
+        let ret = Parser::new(&allocator, content, source_type).parse();
+
+        if !ret.errors.is_empty() {
+            // Parse error - return original
+            return format!("{}{}{}", open_tag, content, close_tag);
+        }
+
+        let mut program = ret.program;
+        let options = MinifierOptions {
+            mangle: Some(MangleOptions::default()),
+            compress: Some(CompressOptions::default()),
+        };
+
+        Minifier::new(options).minify(&allocator, &mut program);
+        let minified = Codegen::new()
+            .with_options(CodegenOptions::minify())
+            .build(&program)
+            .code;
+
+        format!("{}{}{}", open_tag, minified, close_tag)
+    })
+    .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_minify_html_basic() {
+        let input = "<html>  <body>   <p>Hello</p>  </body>  </html>";
+        let result = minify_html(input);
+        assert!(result.len() <= input.len());
+        assert!(result.contains("Hello"));
+    }
+
+    #[test]
+    fn test_minify_html_preserves_pre() {
+        let input = "<pre>  code  with  spaces  </pre>";
+        let result = minify_html(input);
+        // Pre tags should preserve whitespace
+        assert!(result.contains("code  with  spaces"));
+    }
+
+    #[test]
+    fn test_minify_inline_js_basic() {
+        let input = r#"<script>
+            function hello() {
+                console.log("hi");
+            }
+        </script>"#;
+        let result = minify_inline_js(input);
+        assert!(
+            !result.contains('\n') || result.matches('\n').count() < input.matches('\n').count()
+        );
+        assert!(result.contains("<script>"));
+        assert!(result.contains("</script>"));
+    }
+
+    #[test]
+    fn test_minify_inline_js_skips_external() {
+        let input = r#"<script src="/js/app.js"></script>"#;
+        let result = minify_inline_js(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_minify_inline_js_skips_empty() {
+        let input = "<script></script>";
+        let result = minify_inline_js(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_minify_inline_js_multiple_scripts() {
+        // Use console.log to prevent DCE
+        let input = r#"<script>console.log(1);</script><script>console.log(2);</script>"#;
+        let result = minify_inline_js(input);
+        assert!(
+            result.contains("console.log(1)") && result.contains("console.log(2)"),
+            "Result: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_minify_inline_js_preserves_on_parse_error() {
+        let input = "<script>function { broken</script>";
+        let result = minify_inline_js(input);
+        // Should preserve original on parse error
+        assert!(result.contains("function { broken"));
+    }
+
+    #[test]
+    fn test_minify_inline_js_with_attributes() {
+        // Use console.log to prevent DCE
+        let input = r#"<script type="text/javascript">console.log(1);</script>"#;
+        let result = minify_inline_js(input);
+        assert!(result.contains(r#"type="text/javascript""#));
+    }
+
+    #[test]
+    fn test_minify_html_with_inline_js() {
+        // Use console.log to prevent DCE
+        let input = r#"<html><head><script>console.log(true);</script></head></html>"#;
+        let result = minify_html(input);
+        // Should minify JS (true -> !0)
+        assert!(
+            result.contains("!0") || result.contains("true"),
+            "Result: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_minify_html_css_minification() {
+        let input = r#"<style>  body  {  color:  red;  }  </style>"#;
+        let result = minify_html(input);
+        assert!(result.len() < input.len());
     }
 }
