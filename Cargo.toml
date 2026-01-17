@@ -40,6 +40,7 @@ image = { version = "0.25", default-features = false, features = [
   "png",
 ] }
 webp = "0.3"
+kamadak-exif = "0.5"
 
 # CSS minification
 minifier = "0.3"

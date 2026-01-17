@@ -3,8 +3,44 @@
 //! Functions: image_dimensions, image_resize, image_convert, image_optimize
 
 use crate::tracker::SharedTracker;
+use image::DynamicImage;
 use mlua::{Lua, Result, Table, Value};
 use std::path::{Path, PathBuf};
+
+/// Apply EXIF orientation to an image
+fn apply_exif_orientation(img: DynamicImage, path: &Path) -> DynamicImage {
+    use std::fs::File;
+    use std::io::BufReader;
+
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return img,
+    };
+
+    let exif = match exif::Reader::new().read_from_container(&mut BufReader::new(file)) {
+        Ok(e) => e,
+        Err(_) => return img,
+    };
+
+    let orientation = exif
+        .get_field(exif::Tag::Orientation, exif::In::PRIMARY)
+        .and_then(|f| f.value.get_uint(0))
+        .unwrap_or(1);
+
+    // Apply transformation based on EXIF orientation
+    // https://exiftool.org/TagNames/EXIF.html (Orientation values)
+    match orientation {
+        1 => img,                     // Normal
+        2 => img.fliph(),             // Flip horizontal
+        3 => img.rotate180(),         // Rotate 180
+        4 => img.flipv(),             // Flip vertical
+        5 => img.rotate90().fliph(),  // Rotate 90 CW + flip H
+        6 => img.rotate90(),          // Rotate 90 CW
+        7 => img.rotate270().fliph(), // Rotate 270 CW + flip H
+        8 => img.rotate270(),         // Rotate 270 CW
+        _ => img,
+    }
+}
 
 /// Register image processing functions on the module table
 pub fn register(
@@ -36,6 +72,7 @@ pub fn register(
 
         match image::open(&full_path) {
             Ok(img) => {
+                let img = apply_exif_orientation(img, &full_path);
                 let (width, height) = img.dimensions();
                 let result = lua.create_table()?;
                 result.set("width", width)?;
@@ -53,7 +90,7 @@ pub fn register(
     let tracker_clone = tracker.clone();
     let image_resize_fn = lua.create_function(
         move |_lua, (input, output, options): (String, String, Table)| {
-            use image::{DynamicImage, GenericImageView, imageops};
+            use image::{GenericImageView, imageops};
 
             let width: u32 = options
                 .get("width")
@@ -82,6 +119,7 @@ pub fn register(
 
             let img = image::open(&input_path)
                 .map_err(|e| mlua::Error::external(format!("Failed to open image: {}", e)))?;
+            let img = apply_exif_orientation(img, &input_path);
 
             let (orig_w, orig_h) = img.dimensions();
             let new_height =
@@ -169,6 +207,7 @@ pub fn register(
 
             let img = image::open(&input_path)
                 .map_err(|e| mlua::Error::external(format!("Failed to open image: {}", e)))?;
+            let img = apply_exif_orientation(img, &input_path);
 
             if let Some(parent) = output_path.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| {
@@ -241,6 +280,7 @@ pub fn register(
 
             let img = image::open(&input_path)
                 .map_err(|e| mlua::Error::external(format!("Failed to open image: {}", e)))?;
+            let img = apply_exif_orientation(img, &input_path);
 
             if let Some(parent) = output_path.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| {
