@@ -23,6 +23,7 @@ mod images;
 mod js;
 mod markdown_context;
 mod parallel;
+mod pwa;
 mod search;
 mod text;
 mod types;
@@ -53,9 +54,10 @@ use std::path::Path;
 /// - Content: rs.render_markdown, rs.rss_date, rs.html_to_text, etc.
 /// - Images: rs.image_dimensions, rs.image_resize, rs.image_convert, rs.image_optimize
 /// - JS: rs.js.concat, rs.js.bundle
-/// - CSS: rs.css.concat
+/// - CSS: rs.css.concat, rs.css.bundle
 /// - Fonts: rs.fonts.download_google_font
 /// - Assets: rs.assets.hash, rs.assets.write_hashed, rs.assets.get_path
+/// - PWA: rs.pwa.manifest, rs.pwa.service_worker
 /// - Coroutines: rs.coro.task, rs.coro.await, rs.coro.yield, etc.
 /// - Parallel (rayon): rs.parallel.load_json, rs.parallel.read_files, etc.
 /// - Async I/O (tokio): rs.async.fetch, rs.async.read_file, rs.async.write_file, etc.
@@ -115,8 +117,11 @@ pub fn register(
     let highlight_module = highlight::create_module(lua)?;
     rs_module.set("highlight", highlight_module)?;
 
-    let assets_module = assets::create_module(lua, &root, asset_manifest, tracker)?;
+    let assets_module = assets::create_module(lua, &root, asset_manifest, tracker.clone())?;
     rs_module.set("assets", assets_module)?;
+
+    let pwa_module = pwa::create_module(lua, &root, tracker)?;
+    rs_module.set("pwa", pwa_module)?;
 
     // Register as a preloaded module so require("rs-web") works
     let preload: Table = lua

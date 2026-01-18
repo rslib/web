@@ -625,6 +625,125 @@ pub static LUA_CLASSES: &[LuaClass] = &[
             description: "Hash length in characters (default: 8)",
         }],
     },
+    // PWA
+    LuaClass {
+        name: "ManifestIcon",
+        description: "Icon definition for web app manifest",
+        fields: &[
+            LuaField {
+                name: "src",
+                typ: "string",
+                description: "Icon image path",
+            },
+            LuaField {
+                name: "sizes",
+                typ: "string",
+                description: "Icon dimensions (e.g., '192x192')",
+            },
+            LuaField {
+                name: "type",
+                typ: "string?",
+                description: "MIME type (default: 'image/png')",
+            },
+            LuaField {
+                name: "purpose",
+                typ: "string?",
+                description: "Icon purpose (e.g., 'any', 'maskable')",
+            },
+        ],
+    },
+    LuaClass {
+        name: "ManifestOptions",
+        description: "Options for pwa.manifest",
+        fields: &[
+            LuaField {
+                name: "name",
+                typ: "string",
+                description: "Full app name",
+            },
+            LuaField {
+                name: "short_name",
+                typ: "string",
+                description: "Short app name for home screen",
+            },
+            LuaField {
+                name: "description",
+                typ: "string?",
+                description: "App description",
+            },
+            LuaField {
+                name: "start_url",
+                typ: "string?",
+                description: "Start URL (default: '/')",
+            },
+            LuaField {
+                name: "display",
+                typ: "string?",
+                description: "Display mode (default: 'standalone')",
+            },
+            LuaField {
+                name: "background_color",
+                typ: "string?",
+                description: "Background color (default: '#ffffff')",
+            },
+            LuaField {
+                name: "theme_color",
+                typ: "string?",
+                description: "Theme color (default: '#000000')",
+            },
+            LuaField {
+                name: "icons",
+                typ: "ManifestIcon[]?",
+                description: "App icons",
+            },
+            LuaField {
+                name: "output",
+                typ: "string",
+                description: "Output path for manifest.json",
+            },
+        ],
+    },
+    LuaClass {
+        name: "ServiceWorkerOptions",
+        description: "Options for pwa.service_worker",
+        fields: &[
+            LuaField {
+                name: "cache_name",
+                typ: "string",
+                description: "Cache name prefix",
+            },
+            LuaField {
+                name: "version",
+                typ: "string?",
+                description: "Cache version (default: '1')",
+            },
+            LuaField {
+                name: "precache",
+                typ: "string[]?",
+                description: "URLs to precache on install",
+            },
+            LuaField {
+                name: "network_first",
+                typ: "string[]?",
+                description: "URL patterns for network-first strategy",
+            },
+            LuaField {
+                name: "cache_first",
+                typ: "string[]?",
+                description: "URL patterns for cache-first strategy",
+            },
+            LuaField {
+                name: "offline_page",
+                typ: "string?",
+                description: "URL of offline fallback page",
+            },
+            LuaField {
+                name: "output",
+                typ: "string",
+                description: "Output path for sw.js",
+            },
+        ],
+    },
 ];
 
 // ============================================================================
@@ -2303,6 +2422,31 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         params: &[],
         returns: "nil",
     },
+    // PWA
+    LuaFunction {
+        name: "manifest",
+        module: Some("pwa"),
+        description: "Generate a web app manifest (async)",
+        params: &[LuaParam {
+            name: "options",
+            typ: "ManifestOptions",
+            description: "Manifest options",
+            optional: false,
+        }],
+        returns: "AsyncHandle",
+    },
+    LuaFunction {
+        name: "service_worker",
+        module: Some("pwa"),
+        description: "Generate a service worker for offline caching (async)",
+        params: &[LuaParam {
+            name: "options",
+            typ: "ServiceWorkerOptions",
+            description: "Service worker options",
+            optional: false,
+        }],
+        returns: "AsyncHandle",
+    },
 ];
 
 // ============================================================================
@@ -2348,6 +2492,7 @@ pub fn generate_emmylua() -> String {
     let mut async_fns: Vec<&LuaFunction> = Vec::new();
     let mut crypt_fns: Vec<&LuaFunction> = Vec::new();
     let mut assets_fns: Vec<&LuaFunction> = Vec::new();
+    let mut pwa_fns: Vec<&LuaFunction> = Vec::new();
 
     for func in LUA_FUNCTIONS {
         match func.module {
@@ -2357,6 +2502,7 @@ pub fn generate_emmylua() -> String {
             Some("async") => async_fns.push(func),
             Some("crypt") => crypt_fns.push(func),
             Some("assets") => assets_fns.push(func),
+            Some("pwa") => pwa_fns.push(func),
             _ => global_fns.push(func),
         }
     }
@@ -2491,6 +2637,32 @@ pub fn generate_emmylua() -> String {
     }
     output.push('\n');
 
+    // Generate pwa submodule class
+    output.push_str(
+        "-- =============================================================================\n",
+    );
+    output.push_str("-- PWA SUBMODULE\n");
+    output.push_str(
+        "-- =============================================================================\n\n",
+    );
+    output.push_str("---@class RsPwaModule\n");
+    for func in &pwa_fns {
+        let params = func
+            .params
+            .iter()
+            .map(|p| {
+                let opt = if p.optional { "?" } else { "" };
+                format!("{}{}: {}", p.name, opt, p.typ)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!(
+            "---@field {} fun({}): {} {}\n",
+            func.name, params, func.returns, func.description
+        ));
+    }
+    output.push('\n');
+
     // Generate main rs module class
     output.push_str(
         "-- =============================================================================\n",
@@ -2508,6 +2680,7 @@ pub fn generate_emmylua() -> String {
     output.push_str("---@field async RsAsyncModule Async I/O functions (tokio-backed)\n");
     output.push_str("---@field crypt RsCryptModule Encryption functions (AES-256-GCM)\n");
     output.push_str("---@field assets RsAssetsModule Asset hashing and manifest\n");
+    output.push_str("---@field pwa RsPwaModule PWA (manifest and service worker)\n");
 
     // Add all global functions as fields
     for func in &global_fns {
@@ -2727,7 +2900,8 @@ pub fn generate_markdown() -> String {
     output.push_str("- [Parallel Module](#parallel-module)\n");
     output.push_str("- [Async Module](#async-module)\n");
     output.push_str("- [Crypt Module](#crypt-module)\n");
-    output.push_str("- [Assets Module](#assets-module)\n\n");
+    output.push_str("- [Assets Module](#assets-module)\n");
+    output.push_str("- [PWA Module](#pwa-module)\n\n");
 
     // Types section
     output.push_str("## Types\n\n");
@@ -2948,6 +3122,28 @@ pub fn generate_markdown() -> String {
     output.push_str("Asset hashing for cache busting. Use with Tera `| asset` filter.\n\n");
     for func in LUA_FUNCTIONS.iter().filter(|f| f.module == Some("assets")) {
         output.push_str(&format!("### `rs.assets.{}()`\n\n", func.name));
+        output.push_str(&format!("{}\n\n", func.description));
+
+        if !func.params.is_empty() {
+            output.push_str("**Parameters:**\n\n");
+            for param in func.params {
+                let opt = if param.optional { " (optional)" } else { "" };
+                output.push_str(&format!(
+                    "- `{}`: `{}`{} - {}\n",
+                    param.name, param.typ, opt, param.description
+                ));
+            }
+            output.push('\n');
+        }
+
+        output.push_str(&format!("**Returns:** `{}`\n\n", func.returns));
+    }
+
+    // PWA Module
+    output.push_str("## PWA Module\n\n");
+    output.push_str("Progressive Web App support: manifest and service worker generation.\n\n");
+    for func in LUA_FUNCTIONS.iter().filter(|f| f.module == Some("pwa")) {
+        output.push_str(&format!("### `rs.pwa.{}()`\n\n", func.name));
         output.push_str(&format!("{}\n\n", func.description));
 
         if !func.params.is_empty() {
