@@ -218,7 +218,287 @@ pub fn create_module(lua: &Lua, project_root: &Path, tracker: SharedTracker) -> 
         })?;
     css_module.set("purge", purge_fn)?;
 
+    // rs.css.critical(html_content, css_path, options?) - async
+    // Extract critical CSS for a specific HTML page
+    // Returns the critical CSS string
+    let root_clone = root.clone();
+    let tracker_clone = tracker.clone();
+    let critical_fn = lua.create_function(
+        move |_lua, (html_content, css_path, options): (String, String, Option<Table>)| {
+            let minify = options
+                .as_ref()
+                .and_then(|t| t.get::<bool>("minify").ok())
+                .unwrap_or(false);
+            let safelist: Vec<String> = options
+                .as_ref()
+                .and_then(|t| {
+                    t.get::<Table>("safelist").ok().map(|tbl| {
+                        tbl.pairs::<i64, String>()
+                            .filter_map(|r| r.ok().map(|(_, v)| v))
+                            .collect()
+                    })
+                })
+                .unwrap_or_default();
+
+            let css_file = resolve_output_path(&css_path, &root_clone);
+            let tracker = tracker_clone.clone();
+
+            let handle = runtime().spawn(async move {
+                // Read CSS file
+                let css_content = tokio::fs::read_to_string(&css_file)
+                    .await
+                    .map_err(|e| format!("Failed to read CSS file: {}", e))?;
+
+                // Track the read
+                if let Ok(canonical) = css_file.canonicalize() {
+                    tracker.record_read(canonical, css_content.as_bytes());
+                }
+
+                // Extract critical CSS in blocking task
+                let critical_css = tokio::task::spawn_blocking(move || {
+                    // Extract used selectors from this specific HTML
+                    let used = extract_used_selectors(&html_content);
+                    let safelist_regex = compile_safelist(&safelist);
+
+                    // Extract only the CSS rules needed for this HTML
+                    let critical = purge_css(&css_content, &used, &safelist_regex);
+
+                    // Optionally minify
+                    if minify {
+                        minify_css(&critical).unwrap_or(critical)
+                    } else {
+                        critical
+                    }
+                })
+                .await
+                .map_err(|e| format!("Task failed: {}", e))?;
+
+                Ok(critical_css)
+            });
+
+            Ok(AsyncIOTask::from_string_handle(handle))
+        },
+    )?;
+    css_module.set("critical", critical_fn)?;
+
+    // rs.css.inline_critical(html_path, css_path, options?) - async
+    // Inline critical CSS into an HTML file, converting the main stylesheet to async loading
+    let root_clone = root.clone();
+    let tracker_clone = tracker;
+    let inline_critical_fn = lua.create_function(
+        move |_lua, (html_path, css_path, options): (String, String, Option<Table>)| {
+            let minify = options
+                .as_ref()
+                .and_then(|t| t.get::<bool>("minify").ok())
+                .unwrap_or(false);
+            let safelist: Vec<String> = options
+                .as_ref()
+                .and_then(|t| {
+                    t.get::<Table>("safelist").ok().map(|tbl| {
+                        tbl.pairs::<i64, String>()
+                            .filter_map(|r| r.ok().map(|(_, v)| v))
+                            .collect()
+                    })
+                })
+                .unwrap_or_default();
+            // The href to use for async loading (defaults to css_path made relative)
+            let css_href = options
+                .as_ref()
+                .and_then(|t| t.get::<String>("css_href").ok());
+
+            let html_file = resolve_output_path(&html_path, &root_clone);
+            let css_file = resolve_output_path(&css_path, &root_clone);
+            let tracker = tracker_clone.clone();
+
+            let handle = runtime().spawn(async move {
+                // Read both files
+                let (html_content, css_content) = tokio::try_join!(
+                    tokio::fs::read_to_string(&html_file),
+                    tokio::fs::read_to_string(&css_file)
+                )
+                .map_err(|e| format!("Failed to read files: {}", e))?;
+
+                // Track reads
+                if let Ok(canonical) = html_file.canonicalize() {
+                    tracker.record_read(canonical, html_content.as_bytes());
+                }
+                if let Ok(canonical) = css_file.canonicalize() {
+                    tracker.record_read(canonical, css_content.as_bytes());
+                }
+
+                // Process in blocking task
+                let html_clone = html_content.clone();
+                let result_html = tokio::task::spawn_blocking(move || {
+                    // Extract used selectors from this specific HTML
+                    let used = extract_used_selectors(&html_clone);
+                    let safelist_regex = compile_safelist(&safelist);
+
+                    // Extract critical CSS
+                    let critical = purge_css(&css_content, &used, &safelist_regex);
+                    let critical = if minify {
+                        minify_css(&critical).unwrap_or(critical)
+                    } else {
+                        critical
+                    };
+
+                    // Inline critical CSS into HTML
+                    inline_critical_css(&html_content, &critical, css_href.as_deref())
+                })
+                .await
+                .map_err(|e| format!("Task failed: {}", e))?;
+
+                // Write modified HTML
+                tokio::fs::write(&html_file, &result_html)
+                    .await
+                    .map_err(|e| format!("Failed to write HTML: {}", e))?;
+
+                // Track write
+                let canonical = html_file.canonicalize().unwrap_or(html_file);
+                tracker.record_write_async(canonical, result_html.as_bytes());
+
+                Ok(())
+            });
+
+            Ok(AsyncIOTask::new(handle))
+        },
+    )?;
+    css_module.set("inline_critical", inline_critical_fn)?;
+
     Ok(css_module)
+}
+
+/// Inline critical CSS into HTML and make main stylesheet load asynchronously
+fn inline_critical_css(html: &str, critical_css: &str, css_href: Option<&str>) -> String {
+    // First, remove any existing critical CSS block (for incremental rebuilds)
+    let html = remove_existing_critical_css(html);
+
+    // Build the critical CSS block with unique IDs for easy removal
+    let mut critical_block = String::new();
+    critical_block.push_str("<style id=\"rs-critical-css\">");
+    critical_block.push_str(critical_css);
+    critical_block.push_str("</style>");
+
+    // If we have a CSS href, add async loading with unique IDs
+    if let Some(href) = css_href {
+        // Use the "print media" trick for async CSS loading
+        critical_block.push_str(&format!(
+            r#"<link id="rs-critical-async" rel=stylesheet href="{}" media=print onload="this.media='all'">"#,
+            href
+        ));
+        critical_block.push_str(&format!(
+            r#"<noscript id="rs-critical-noscript"><link rel=stylesheet href="{}"></noscript>"#,
+            href
+        ));
+    }
+
+    // Try multiple insertion points for compatibility with minified HTML
+    // 1. Before </head> (standard HTML)
+    if let Some(pos) = html.find("</head>") {
+        let mut result = String::with_capacity(html.len() + critical_block.len());
+        result.push_str(&html[..pos]);
+        result.push_str(&critical_block);
+        result.push_str(&html[pos..]);
+        return result;
+    }
+
+    // 2. Before <body> (minified HTML without </head>)
+    if let Some(pos) = html.find("<body") {
+        let mut result = String::with_capacity(html.len() + critical_block.len());
+        result.push_str(&html[..pos]);
+        result.push_str(&critical_block);
+        result.push_str(&html[pos..]);
+        return result;
+    }
+
+    // 3. After the last stylesheet link (heavily minified HTML)
+    // Find the last <link...stylesheet...> and insert after it
+    if let Some(last_link_end) = find_last_stylesheet_end(&html) {
+        let mut result = String::with_capacity(html.len() + critical_block.len());
+        result.push_str(&html[..last_link_end]);
+        result.push_str(&critical_block);
+        result.push_str(&html[last_link_end..]);
+        return result;
+    }
+
+    // No suitable insertion point found, return original
+    html.to_string()
+}
+
+/// Remove existing critical CSS block and its associated async loading tags
+/// This is needed for incremental rebuilds where CSS changed but HTML didn't
+/// Uses unique IDs (rs-critical-css, rs-critical-async, rs-critical-noscript) for reliable removal
+fn remove_existing_critical_css(html: &str) -> String {
+    let mut result = html.to_string();
+
+    // Remove <style id="rs-critical-css">...</style>
+    result = remove_element_by_id(&result, "rs-critical-css", "style", "</style>");
+
+    // Also check for old format without "rs-" prefix for backwards compatibility
+    result = remove_element_by_id(&result, "critical-css", "style", "</style>");
+
+    // Remove <link id="rs-critical-async" ...>
+    result = remove_self_closing_by_id(&result, "rs-critical-async");
+
+    // Remove <noscript id="rs-critical-noscript">...</noscript>
+    result = remove_element_by_id(&result, "rs-critical-noscript", "noscript", "</noscript>");
+
+    result
+}
+
+/// Remove an element by its ID (for elements with closing tags)
+fn remove_element_by_id(html: &str, id: &str, _tag: &str, close_tag: &str) -> String {
+    let id_pattern = format!("id=\"{}\"", id);
+    if let Some(id_pos) = html.find(&id_pattern) {
+        // Find the start of this tag (go backwards to find '<')
+        if let Some(tag_start) = html[..id_pos].rfind('<') {
+            // Find the closing tag
+            if let Some(close_rel) = html[tag_start..].find(close_tag) {
+                let end = tag_start + close_rel + close_tag.len();
+                return format!("{}{}", &html[..tag_start], &html[end..]);
+            }
+        }
+    }
+    html.to_string()
+}
+
+/// Remove a self-closing element by its ID (like <link id="...">)
+fn remove_self_closing_by_id(html: &str, id: &str) -> String {
+    let id_pattern = format!("id=\"{}\"", id);
+    if let Some(id_pos) = html.find(&id_pattern) {
+        // Find the start of this tag
+        if let Some(tag_start) = html[..id_pos].rfind('<') {
+            // Find the end of this tag (the next '>')
+            if let Some(tag_end_rel) = html[tag_start..].find('>') {
+                let end = tag_start + tag_end_rel + 1;
+                return format!("{}{}", &html[..tag_start], &html[end..]);
+            }
+        }
+    }
+    html.to_string()
+}
+
+/// Find the end position of the last stylesheet link tag
+fn find_last_stylesheet_end(html: &str) -> Option<usize> {
+    let mut last_end = None;
+    let mut search_start = 0;
+
+    while let Some(link_start) = html[search_start..].find("<link") {
+        let abs_start = search_start + link_start;
+        // Find the end of this link tag
+        if let Some(link_end_rel) = html[abs_start..].find('>') {
+            let abs_end = abs_start + link_end_rel + 1;
+            let link_tag = &html[abs_start..abs_end];
+            // Check if it's a stylesheet link
+            if link_tag.contains("stylesheet") {
+                last_end = Some(abs_end);
+            }
+            search_start = abs_end;
+        } else {
+            break;
+        }
+    }
+
+    last_end
 }
 
 /// Options for CSS bundling
@@ -1266,5 +1546,131 @@ mod tests {
         assert!(result.contains(".active"));
         assert!(result.contains(".hidden"));
         assert!(!result.contains(".inactive"));
+    }
+
+    #[test]
+    fn test_inline_critical_css_basic() {
+        let html = r#"<!DOCTYPE html>
+<html>
+<head>
+<title>Test</title>
+</head>
+<body>
+<div class="container">Hello</div>
+</body>
+</html>"#;
+        let critical_css = ".container { color: red; }";
+
+        let result = inline_critical_css(html, critical_css, None);
+
+        assert!(result.contains("<style id=\"rs-critical-css\">"));
+        assert!(result.contains(".container { color: red; }"));
+        assert!(result.contains("</style></head>"));
+    }
+
+    #[test]
+    fn test_inline_critical_css_with_async_loading() {
+        let html = r#"<!DOCTYPE html>
+<html>
+<head>
+<title>Test</title>
+</head>
+<body>
+<div>Hello</div>
+</body>
+</html>"#;
+        let critical_css = "body { margin: 0; }";
+
+        let result = inline_critical_css(html, critical_css, Some("/styles/main.css"));
+
+        assert!(result.contains("<style id=\"rs-critical-css\">"));
+        assert!(result.contains("body { margin: 0; }"));
+        assert!(result.contains(r#"id="rs-critical-async""#));
+        assert!(result.contains(r#"media=print onload="this.media='all'""#));
+        assert!(result.contains(r#"href="/styles/main.css""#));
+        assert!(result.contains(r#"<noscript id="rs-critical-noscript">"#));
+    }
+
+    #[test]
+    fn test_inline_critical_css_minified_with_body() {
+        // Minified HTML without </head> tag but with <body> (HTML5 allows this)
+        let html = r#"<!doctype html><html lang=en><meta charset=UTF-8><link href=/styles/main.css rel=stylesheet><body><div>Hello</div>"#;
+        let critical_css = "body{margin:0}";
+
+        let result = inline_critical_css(html, critical_css, Some("/styles/main.css"));
+
+        // Should insert before <body>
+        assert!(result.contains("<style id=\"rs-critical-css\">"));
+        assert!(result.contains("body{margin:0}"));
+        assert!(result.contains(r#"</noscript><body>"#));
+    }
+
+    #[test]
+    fn test_inline_critical_css_minified_no_body() {
+        // Minified HTML without </head> or <body> tags
+        let html = r#"<!doctype html><html lang=en><meta charset=UTF-8><link href=/styles/main.css rel=stylesheet><div>Hello</div>"#;
+        let critical_css = "body{margin:0}";
+
+        let result = inline_critical_css(html, critical_css, Some("/styles/main.css"));
+
+        // Should insert after the last stylesheet link
+        assert!(result.contains("<style id=\"rs-critical-css\">"));
+        assert!(result.contains("body{margin:0}"));
+        assert!(result.contains(r#"rel=stylesheet><style id="rs-critical-css">"#));
+    }
+
+    #[test]
+    fn test_inline_critical_css_no_insertion_point() {
+        let html = r#"<div>No head, body, or stylesheet</div>"#;
+        let critical_css = ".test { color: red; }";
+
+        let result = inline_critical_css(html, critical_css, None);
+
+        // Should return original HTML unchanged
+        assert_eq!(result, html);
+    }
+
+    #[test]
+    fn test_inline_critical_css_replaces_existing() {
+        // HTML with existing critical CSS using new IDs (simulating incremental rebuild)
+        let html = r#"<!doctype html><html><link href=/styles/main.css rel=stylesheet><style id="rs-critical-css">OLD CSS</style><link id="rs-critical-async" rel=stylesheet href="/styles/main.abc123.css" media=print onload="this.media='all'"><noscript id="rs-critical-noscript"><link rel=stylesheet href="/styles/main.abc123.css"></noscript><body><div>Hello</div>"#;
+        let new_critical_css = "NEW CSS";
+
+        let result = inline_critical_css(html, new_critical_css, Some("/styles/main.def456.css"));
+
+        // Should have new critical CSS
+        assert!(result.contains("NEW CSS"));
+        // Should NOT have old critical CSS
+        assert!(!result.contains("OLD CSS"));
+        // Should NOT have old async loading link
+        assert!(!result.contains("abc123"));
+        // Should have new async loading link
+        assert!(result.contains("def456"));
+        // Should only have ONE rs-critical-css style tag
+        assert_eq!(result.matches("rs-critical-css").count(), 1);
+    }
+
+    #[test]
+    fn test_remove_existing_critical_css() {
+        let html = r#"<link href=/a.css rel=stylesheet><style id="rs-critical-css">body{margin:0}</style><link id="rs-critical-async" rel=stylesheet href="/b.css" media=print onload="this.media='all'"><noscript id="rs-critical-noscript"><link rel=stylesheet href="/b.css"></noscript><body>"#;
+
+        let result = remove_existing_critical_css(html);
+
+        assert!(!result.contains("rs-critical-css"));
+        assert!(!result.contains("rs-critical-async"));
+        assert!(!result.contains("rs-critical-noscript"));
+        // Original stylesheet should remain
+        assert!(result.contains("<link href=/a.css rel=stylesheet>"));
+    }
+
+    #[test]
+    fn test_remove_existing_critical_css_backwards_compat() {
+        // Old format without "rs-" prefix should also be removed
+        let html = r#"<link href=/a.css rel=stylesheet><style id="critical-css">body{margin:0}</style><body>"#;
+
+        let result = remove_existing_critical_css(html);
+
+        assert!(!result.contains("critical-css"));
+        assert!(result.contains("<link href=/a.css rel=stylesheet>"));
     }
 }

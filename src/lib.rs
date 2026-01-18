@@ -122,6 +122,8 @@
 //! - `bundle(paths, output, options?)` - Bundle CSS with @import resolution via LightningCSS (async)
 //! - `bundle_many(paths, output_dir, options?)` - Bundle multiple CSS entries to separate files (async)
 //! - `purge(css_path, options?)` - Remove unused CSS rules based on HTML/JS output (async, call in after_build)
+//! - `critical(html, css_path, options?)` - Extract critical CSS for a specific HTML page (async)
+//! - `inline_critical(html_path, css_path, options?)` - Inline critical CSS into HTML with async loading (async)
 //!
 //! **Asset Hashing (rs.assets):**
 //! - `hash(content, length?)` - Compute SHA256 hash of content (async)

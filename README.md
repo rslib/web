@@ -189,8 +189,11 @@ Available in `config.lua`:
 | `rs.css.bundle(paths, output, options?)` | Bundle CSS with @import resolution via LightningCSS (async) |
 | `rs.css.bundle_many(paths, output_dir, options?)` | Bundle multiple CSS entries to separate files (async) |
 | `rs.css.purge(css_path, options?)` | Remove unused CSS based on HTML/JS output (async, call in after_build) |
+| `rs.css.critical(html, css_path, options?)` | Extract critical CSS for a specific HTML page (async, returns string) |
+| `rs.css.inline_critical(html_path, css_path, options?)` | Inline critical CSS into HTML with async loading for full CSS (async) |
 
 CSS options: `minify` (bool), `purge` (bool, default false), `safelist` (string[] regex patterns to always keep)
+Critical options: `minify` (bool), `safelist` (string[]), `css_href` (string, URL for async loading)
 
 **Asset Hashing (rs.assets):**
 

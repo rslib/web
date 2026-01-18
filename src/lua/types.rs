@@ -255,6 +255,43 @@ pub static LUA_CLASSES: &[LuaClass] = &[
         }],
     },
     LuaClass {
+        name: "CssCriticalOptions",
+        description: "Options for rs.css.critical",
+        fields: &[
+            LuaField {
+                name: "minify",
+                typ: "boolean?",
+                description: "Minify the critical CSS (default: false)",
+            },
+            LuaField {
+                name: "safelist",
+                typ: "string[]?",
+                description: "Regex patterns for selectors to always keep",
+            },
+        ],
+    },
+    LuaClass {
+        name: "CssInlineCriticalOptions",
+        description: "Options for rs.css.inline_critical",
+        fields: &[
+            LuaField {
+                name: "minify",
+                typ: "boolean?",
+                description: "Minify the critical CSS (default: false)",
+            },
+            LuaField {
+                name: "safelist",
+                typ: "string[]?",
+                description: "Regex patterns for selectors to always keep",
+            },
+            LuaField {
+                name: "css_href",
+                typ: "string?",
+                description: "URL for async loading of full CSS (e.g., '/styles/main.css')",
+            },
+        ],
+    },
+    LuaClass {
         name: "GoogleFontOptions",
         description: "Options for download_google_font",
         fields: &[
@@ -2631,6 +2668,58 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
                 name: "options",
                 typ: "CssPurgeOptions",
                 description: "Purge options (safelist)",
+                optional: true,
+            },
+        ],
+        returns: "AsyncHandle",
+    },
+    LuaFunction {
+        name: "critical",
+        module: Some("css"),
+        description: "Extract critical CSS for a specific HTML page (async)",
+        params: &[
+            LuaParam {
+                name: "html_content",
+                typ: "string",
+                description: "HTML content to extract critical CSS for",
+                optional: false,
+            },
+            LuaParam {
+                name: "css_path",
+                typ: "string",
+                description: "Path to CSS file",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "CssCriticalOptions",
+                description: "Options (minify, safelist)",
+                optional: true,
+            },
+        ],
+        returns: "string",
+    },
+    LuaFunction {
+        name: "inline_critical",
+        module: Some("css"),
+        description: "Inline critical CSS into HTML file with async loading for full CSS (async)",
+        params: &[
+            LuaParam {
+                name: "html_path",
+                typ: "string",
+                description: "Path to HTML file to modify",
+                optional: false,
+            },
+            LuaParam {
+                name: "css_path",
+                typ: "string",
+                description: "Path to CSS file",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "CssInlineCriticalOptions",
+                description: "Options (minify, safelist, css_href)",
                 optional: true,
             },
         ],
