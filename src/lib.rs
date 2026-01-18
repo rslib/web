@@ -117,6 +117,12 @@
 //! - `build_js(pattern, output, options?)` - Build and concatenate JS files with minification and DCE (async)
 //! - `download_google_font(family, options)` - Download Google Font with optional CSS minification (async)
 //!
+//! **CSS Module (rs.css):**
+//! - `concat(paths, output, options?)` - Concatenate CSS files with optional minification (async)
+//! - `bundle(paths, output, options?)` - Bundle CSS with @import resolution via LightningCSS (async)
+//! - `bundle_many(paths, output_dir, options?)` - Bundle multiple CSS entries to separate files (async)
+//! - `purge(css_path, options?)` - Remove unused CSS rules based on HTML/JS output (async, call in after_build)
+//!
 //! **Asset Hashing (rs.assets):**
 //! - `hash(content, length?)` - Compute SHA256 hash of content (async)
 //! - `hash_sync(content, length?)` - Compute hash synchronously

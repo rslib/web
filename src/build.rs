@@ -394,7 +394,9 @@ impl Builder {
             if let Some(parent) = file_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::write(file_path, html)?;
+            fs::write(&file_path, &html)?;
+            // Track the write for CSS purging
+            self.tracker.record_write(file_path, html.as_bytes());
         } else {
             // Write to directory with index.html (e.g., /about/ -> dist/about/index.html)
             let page_dir = if relative_path.is_empty() {
@@ -403,7 +405,10 @@ impl Builder {
                 self.output_dir.join(relative_path)
             };
             fs::create_dir_all(&page_dir)?;
-            fs::write(page_dir.join("index.html"), html)?;
+            let file_path = page_dir.join("index.html");
+            fs::write(&file_path, &html)?;
+            // Track the write for CSS purging
+            self.tracker.record_write(file_path, html.as_bytes());
         }
 
         Ok(())

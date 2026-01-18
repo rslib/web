@@ -181,6 +181,17 @@ Available in `config.lua`:
 | `check_unused_assets(output_dir)` | Find assets not referenced in HTML output |
 | `download_google_font(family, options)` | Download Google Font files and generate local CSS with optional minification (async, returns handle) |
 
+**CSS Module (rs.css):**
+
+| Function | Description |
+|----------|-------------|
+| `rs.css.concat(paths, output, options?)` | Concatenate CSS files with optional minification (async) |
+| `rs.css.bundle(paths, output, options?)` | Bundle CSS with @import resolution via LightningCSS (async) |
+| `rs.css.bundle_many(paths, output_dir, options?)` | Bundle multiple CSS entries to separate files (async) |
+| `rs.css.purge(css_path, options?)` | Remove unused CSS based on HTML/JS output (async, call in after_build) |
+
+CSS options: `minify` (bool), `purge` (bool, default false), `safelist` (string[] regex patterns to always keep)
+
 **Asset Hashing (rs.assets):**
 
 | Function | Description |

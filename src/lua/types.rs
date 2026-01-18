@@ -218,11 +218,23 @@ pub static LUA_CLASSES: &[LuaClass] = &[
     LuaClass {
         name: "BuildCssOptions",
         description: "Options for build_css",
-        fields: &[LuaField {
-            name: "minify",
-            typ: "boolean?",
-            description: "Minify output CSS (default: false)",
-        }],
+        fields: &[
+            LuaField {
+                name: "minify",
+                typ: "boolean?",
+                description: "Minify output CSS (default: false)",
+            },
+            LuaField {
+                name: "purge",
+                typ: "boolean?",
+                description: "Remove unused CSS rules based on HTML output (default: false)",
+            },
+            LuaField {
+                name: "safelist",
+                typ: "string[]?",
+                description: "Regex patterns for selectors to always keep",
+            },
+        ],
     },
     LuaClass {
         name: "BuildJsOptions",
@@ -231,6 +243,15 @@ pub static LUA_CLASSES: &[LuaClass] = &[
             name: "minify",
             typ: "boolean?",
             description: "Minify output JS with dead code elimination (default: false)",
+        }],
+    },
+    LuaClass {
+        name: "CssPurgeOptions",
+        description: "Options for rs.css.purge",
+        fields: &[LuaField {
+            name: "safelist",
+            typ: "string[]?",
+            description: "Regex patterns for selectors to always keep",
         }],
     },
     LuaClass {
@@ -2516,6 +2537,105 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         params: &[],
         returns: "nil",
     },
+    // CSS MODULE
+    LuaFunction {
+        name: "concat",
+        module: Some("css"),
+        description: "Concatenate CSS files with optional minification (async)",
+        params: &[
+            LuaParam {
+                name: "paths",
+                typ: "string[]",
+                description: "Array of CSS file paths",
+                optional: false,
+            },
+            LuaParam {
+                name: "output",
+                typ: "string",
+                description: "Output file path",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "BuildCssOptions",
+                description: "Build options (minify, purge, safelist)",
+                optional: true,
+            },
+        ],
+        returns: "AsyncHandle",
+    },
+    LuaFunction {
+        name: "bundle",
+        module: Some("css"),
+        description: "Bundle CSS with @import resolution via LightningCSS (async)",
+        params: &[
+            LuaParam {
+                name: "paths",
+                typ: "string[]",
+                description: "Array of CSS entry file paths",
+                optional: false,
+            },
+            LuaParam {
+                name: "output",
+                typ: "string",
+                description: "Output file path",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "BuildCssOptions",
+                description: "Build options (minify, purge, safelist)",
+                optional: true,
+            },
+        ],
+        returns: "AsyncHandle",
+    },
+    LuaFunction {
+        name: "bundle_many",
+        module: Some("css"),
+        description: "Bundle multiple CSS entries to separate output files (async)",
+        params: &[
+            LuaParam {
+                name: "paths",
+                typ: "string[]",
+                description: "Array of CSS entry file paths",
+                optional: false,
+            },
+            LuaParam {
+                name: "output_dir",
+                typ: "string",
+                description: "Output directory path",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "BuildCssOptions",
+                description: "Build options (minify, purge, safelist)",
+                optional: true,
+            },
+        ],
+        returns: "AsyncHandle",
+    },
+    LuaFunction {
+        name: "purge",
+        module: Some("css"),
+        description: "Remove unused CSS rules based on HTML/JS output (async, call in after_build)",
+        params: &[
+            LuaParam {
+                name: "css_path",
+                typ: "string",
+                description: "Path to CSS file to purge",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "CssPurgeOptions",
+                description: "Purge options (safelist)",
+                optional: true,
+            },
+        ],
+        returns: "AsyncHandle",
+    },
     // PWA
     LuaFunction {
         name: "manifest",
@@ -3117,6 +3237,11 @@ pub fn generate_markdown() -> String {
             "assets",
             "Assets Module",
             "Asset hashing for cache busting. Use with Tera `| asset` filter.",
+        ),
+        (
+            "css",
+            "CSS Module",
+            "CSS bundling, minification, and dead code elimination (purging).",
         ),
         (
             "pwa",
