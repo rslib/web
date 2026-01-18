@@ -616,6 +616,15 @@ pub static LUA_CLASSES: &[LuaClass] = &[
             },
         ],
     },
+    LuaClass {
+        name: "WriteHashedOptions",
+        description: "Options for assets.write_hashed",
+        fields: &[LuaField {
+            name: "hash_length",
+            typ: "number?",
+            description: "Hash length in characters (default: 8)",
+        }],
+    },
 ];
 
 // ============================================================================
@@ -2181,6 +2190,119 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         ],
         returns: "string",
     },
+    // ASSETS MODULE
+    LuaFunction {
+        name: "hash",
+        module: Some("assets"),
+        description: "Compute SHA256 hash of content (async)",
+        params: &[
+            LuaParam {
+                name: "content",
+                typ: "string",
+                description: "Content to hash",
+                optional: false,
+            },
+            LuaParam {
+                name: "length",
+                typ: "number",
+                description: "Hash length in characters (default: 8)",
+                optional: true,
+            },
+        ],
+        returns: "AsyncIOTask",
+    },
+    LuaFunction {
+        name: "hash_sync",
+        module: Some("assets"),
+        description: "Compute SHA256 hash of content synchronously",
+        params: &[
+            LuaParam {
+                name: "content",
+                typ: "string",
+                description: "Content to hash",
+                optional: false,
+            },
+            LuaParam {
+                name: "length",
+                typ: "number",
+                description: "Hash length in characters (default: 8)",
+                optional: true,
+            },
+        ],
+        returns: "string",
+    },
+    LuaFunction {
+        name: "write_hashed",
+        module: Some("assets"),
+        description: "Write file with content-hashed filename",
+        params: &[
+            LuaParam {
+                name: "content",
+                typ: "string",
+                description: "File content",
+                optional: false,
+            },
+            LuaParam {
+                name: "path",
+                typ: "string",
+                description: "Original file path (e.g., 'styles/main.css')",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "WriteHashedOptions",
+                description: "Options (hash_length)",
+                optional: true,
+            },
+        ],
+        returns: "AsyncIOTask",
+    },
+    LuaFunction {
+        name: "register",
+        module: Some("assets"),
+        description: "Register original → hashed path mapping",
+        params: &[
+            LuaParam {
+                name: "original",
+                typ: "string",
+                description: "Original path (e.g., '/styles/main.css')",
+                optional: false,
+            },
+            LuaParam {
+                name: "hashed",
+                typ: "string",
+                description: "Hashed path (e.g., '/styles/main.a1b2c3d4.css')",
+                optional: false,
+            },
+        ],
+        returns: "nil",
+    },
+    LuaFunction {
+        name: "get_path",
+        module: Some("assets"),
+        description: "Get hashed path for original (returns original if not found)",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "Original path",
+            optional: false,
+        }],
+        returns: "string",
+    },
+    LuaFunction {
+        name: "manifest",
+        module: Some("assets"),
+        description: "Get table of all path mappings",
+        params: &[],
+        returns: "table<string, string>",
+    },
+    LuaFunction {
+        name: "clear",
+        module: Some("assets"),
+        description: "Clear the asset manifest",
+        params: &[],
+        returns: "nil",
+    },
 ];
 
 // ============================================================================
@@ -2225,6 +2347,7 @@ pub fn generate_emmylua() -> String {
     let mut parallel_fns: Vec<&LuaFunction> = Vec::new();
     let mut async_fns: Vec<&LuaFunction> = Vec::new();
     let mut crypt_fns: Vec<&LuaFunction> = Vec::new();
+    let mut assets_fns: Vec<&LuaFunction> = Vec::new();
 
     for func in LUA_FUNCTIONS {
         match func.module {
@@ -2233,6 +2356,7 @@ pub fn generate_emmylua() -> String {
             Some("parallel") => parallel_fns.push(func),
             Some("async") => async_fns.push(func),
             Some("crypt") => crypt_fns.push(func),
+            Some("assets") => assets_fns.push(func),
             _ => global_fns.push(func),
         }
     }
@@ -2341,6 +2465,32 @@ pub fn generate_emmylua() -> String {
     }
     output.push('\n');
 
+    // Generate assets submodule class
+    output.push_str(
+        "-- =============================================================================\n",
+    );
+    output.push_str("-- ASSETS SUBMODULE\n");
+    output.push_str(
+        "-- =============================================================================\n\n",
+    );
+    output.push_str("---@class RsAssetsModule\n");
+    for func in &assets_fns {
+        let params = func
+            .params
+            .iter()
+            .map(|p| {
+                let opt = if p.optional { "?" } else { "" };
+                format!("{}{}: {}", p.name, opt, p.typ)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!(
+            "---@field {} fun({}): {} {}\n",
+            func.name, params, func.returns, func.description
+        ));
+    }
+    output.push('\n');
+
     // Generate main rs module class
     output.push_str(
         "-- =============================================================================\n",
@@ -2357,6 +2507,7 @@ pub fn generate_emmylua() -> String {
     output.push_str("---@field parallel RsParallelModule Parallel processing functions\n");
     output.push_str("---@field async RsAsyncModule Async I/O functions (tokio-backed)\n");
     output.push_str("---@field crypt RsCryptModule Encryption functions (AES-256-GCM)\n");
+    output.push_str("---@field assets RsAssetsModule Asset hashing and manifest\n");
 
     // Add all global functions as fields
     for func in &global_fns {
@@ -2518,6 +2669,33 @@ pub fn generate_emmylua() -> String {
         ));
     }
 
+    // Assets submodule stubs
+    output.push_str("-- Assets submodule (hashing and manifest)\n");
+    output.push_str("rs.assets = {}\n\n");
+
+    for func in &assets_fns {
+        output.push_str(&format!("---{}\n", func.description));
+        for param in func.params {
+            let opt = if param.optional { "?" } else { "" };
+            output.push_str(&format!(
+                "---@param {}{} {} {}\n",
+                param.name, opt, param.typ, param.description
+            ));
+        }
+        output.push_str(&format!("---@return {}\n", func.returns));
+
+        let params = func
+            .params
+            .iter()
+            .map(|p| p.name.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!(
+            "function rs.assets.{}({}) end\n\n",
+            func.name, params
+        ));
+    }
+
     output.push_str("return rs\n");
 
     output
@@ -2548,7 +2726,8 @@ pub fn generate_markdown() -> String {
     output.push_str("- [Coro Module](#coro-module)\n");
     output.push_str("- [Parallel Module](#parallel-module)\n");
     output.push_str("- [Async Module](#async-module)\n");
-    output.push_str("- [Crypt Module](#crypt-module)\n\n");
+    output.push_str("- [Crypt Module](#crypt-module)\n");
+    output.push_str("- [Assets Module](#assets-module)\n\n");
 
     // Types section
     output.push_str("## Types\n\n");
@@ -2747,6 +2926,28 @@ pub fn generate_markdown() -> String {
     output.push_str("Encryption functions using AES-256-GCM with Argon2id key derivation.\n\n");
     for func in LUA_FUNCTIONS.iter().filter(|f| f.module == Some("crypt")) {
         output.push_str(&format!("### `rs.crypt.{}()`\n\n", func.name));
+        output.push_str(&format!("{}\n\n", func.description));
+
+        if !func.params.is_empty() {
+            output.push_str("**Parameters:**\n\n");
+            for param in func.params {
+                let opt = if param.optional { " (optional)" } else { "" };
+                output.push_str(&format!(
+                    "- `{}`: `{}`{} - {}\n",
+                    param.name, param.typ, opt, param.description
+                ));
+            }
+            output.push('\n');
+        }
+
+        output.push_str(&format!("**Returns:** `{}`\n\n", func.returns));
+    }
+
+    // Assets module
+    output.push_str("## Assets Module\n\n");
+    output.push_str("Asset hashing for cache busting. Use with Tera `| asset` filter.\n\n");
+    for func in LUA_FUNCTIONS.iter().filter(|f| f.module == Some("assets")) {
+        output.push_str(&format!("### `rs.assets.{}()`\n\n", func.name));
         output.push_str(&format!("{}\n\n", func.description));
 
         if !func.params.is_empty() {

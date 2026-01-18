@@ -181,6 +181,27 @@ Available in `config.lua`:
 | `check_unused_assets(output_dir)` | Find assets not referenced in HTML output |
 | `download_google_font(family, options)` | Download Google Font files and generate local CSS with optional minification (async, returns handle) |
 
+**Asset Hashing (rs.assets):**
+
+| Function | Description |
+|----------|-------------|
+| `rs.assets.hash(content, length?)` | Compute SHA256 hash of content (async, returns handle) |
+| `rs.assets.hash_sync(content, length?)` | Compute hash synchronously |
+| `rs.assets.write_hashed(content, path, options?)` | Write file with content-hashed filename (async) |
+| `rs.assets.register(original, hashed)` | Manually register original → hashed path mapping |
+| `rs.assets.get_path(path)` | Get hashed path for original (or original if not found) |
+| `rs.assets.manifest()` | Get table of all path mappings |
+| `rs.assets.clear()` | Clear the manifest |
+
+**Tera Filter:**
+
+Use `| asset` in templates to resolve hashed asset paths:
+
+```html
+<link rel="stylesheet" href="{{ '/styles/main.css' | asset }}">
+<script src="{{ '/js/editor.js' | asset }}"></script>
+```
+
 **Text Processing:**
 
 | Function | Description |

@@ -12,6 +12,7 @@ use tera::Tera;
 use crate::config::{Config, PageDef};
 use crate::data::register_data_functions;
 use crate::git::register_git_functions;
+use crate::lua::AssetManifest;
 use crate::tracker::SharedTracker;
 
 // Regex patterns for parsing template directives
@@ -132,7 +133,11 @@ pub struct Templates {
 }
 
 impl Templates {
-    pub fn new(template_dir: &Path, tracker: Option<SharedTracker>) -> Result<Self> {
+    pub fn new(
+        template_dir: &Path,
+        tracker: Option<SharedTracker>,
+        asset_manifest: Option<AssetManifest>,
+    ) -> Result<Self> {
         debug!("Loading templates from {:?}", template_dir);
 
         // Build template dependency graph first
@@ -153,7 +158,7 @@ impl Templates {
             .with_context(|| format!("Failed to load templates from {}", template_dir_str))?;
 
         register_git_functions(&mut tera);
-        register_data_functions(&mut tera, tracker);
+        register_data_functions(&mut tera, tracker, asset_manifest);
 
         let template_count = tera.get_template_names().count();
         debug!("Loaded {} templates", template_count);

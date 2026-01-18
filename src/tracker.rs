@@ -112,6 +112,20 @@ impl BuildTracker {
         });
     }
 
+    /// Record a file read directly to shared state (for async contexts like tokio)
+    /// Use this instead of record_read when running in async tasks where
+    /// thread-locals won't be merged properly
+    pub fn record_read_async(&self, path: PathBuf, content: &[u8]) {
+        if !self.enabled {
+            return;
+        }
+        let hash = hash_content(content);
+        let mtime = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        self.reads.lock().insert(path, FileState::new(hash, mtime));
+    }
+
     pub fn record_read_with_hash(&self, path: PathBuf, hash: u64, mtime: SystemTime) {
         if !self.enabled {
             return;
@@ -134,6 +148,20 @@ impl BuildTracker {
                 .borrow_mut()
                 .push((path, FileState::new(hash, mtime)));
         });
+    }
+
+    /// Record a file write directly to shared state (for async contexts like tokio)
+    /// Use this instead of record_write when running in async tasks where
+    /// thread-locals won't be merged properly
+    pub fn record_write_async(&self, path: PathBuf, content: &[u8]) {
+        if !self.enabled {
+            return;
+        }
+        let hash = hash_content(content);
+        let mtime = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .unwrap_or(SystemTime::now());
+        self.writes.lock().insert(path, FileState::new(hash, mtime));
     }
 
     pub fn merge_thread_locals(&self) {
@@ -210,6 +238,12 @@ impl BuildTracker {
         self.html_refs.lock().clear();
         self.asset_to_pages.lock().clear();
         self.memo.clear();
+    }
+
+    /// Clear only writes (for incremental rebuilds)
+    pub fn clear_writes(&self) {
+        LOCAL_WRITES.with(|w| w.borrow_mut().clear());
+        self.writes.lock().clear();
     }
 
     /// Record HTML asset references for a rendered page

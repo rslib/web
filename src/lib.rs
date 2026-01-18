@@ -117,6 +117,15 @@
 //! - `build_js(pattern, output, options?)` - Build and concatenate JS files with minification and DCE (async)
 //! - `download_google_font(family, options)` - Download Google Font with optional CSS minification (async)
 //!
+//! **Asset Hashing (rs.assets):**
+//! - `hash(content, length?)` - Compute SHA256 hash of content (async)
+//! - `hash_sync(content, length?)` - Compute hash synchronously
+//! - `write_hashed(content, path, options?)` - Write file with hashed filename (async)
+//! - `register(original, hashed)` - Register asset path mapping
+//! - `get_path(path)` - Get hashed path for original
+//! - `manifest()` - Get all path mappings
+//! - `clear()` - Clear the manifest
+//!
 //! **Text Processing:**
 //! - `slugify(text)` - Convert text to URL-friendly slug
 //! - `word_count(text)` - Count words in text

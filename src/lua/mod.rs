@@ -12,18 +12,24 @@ mod collections;
 mod content;
 mod coro;
 mod crypt;
+mod css;
 mod env;
 mod file_ops;
+mod fonts;
 mod git;
 mod helpers;
+mod highlight;
 mod images;
+mod js;
 mod markdown_context;
 mod parallel;
 mod search;
 mod text;
 mod types;
 
+pub use assets::{AssetManifest, create_manifest};
 pub use helpers::{is_path_within_root, parse_frontmatter_content, resolve_path};
+pub use highlight::highlight_code_sync;
 pub use types::{LuaClass, LuaField, LuaFunction, LuaParam, generate_emmylua, generate_markdown};
 
 use crate::tracker::SharedTracker;
@@ -46,7 +52,10 @@ use std::path::Path;
 /// - Git: rs.git_info
 /// - Content: rs.render_markdown, rs.rss_date, rs.html_to_text, etc.
 /// - Images: rs.image_dimensions, rs.image_resize, rs.image_convert, rs.image_optimize
-/// - Assets: rs.build_css
+/// - JS: rs.js.concat, rs.js.bundle
+/// - CSS: rs.css.concat
+/// - Fonts: rs.fonts.download_google_font
+/// - Assets: rs.assets.hash, rs.assets.write_hashed, rs.assets.get_path
 /// - Coroutines: rs.coro.task, rs.coro.await, rs.coro.yield, etc.
 /// - Parallel (rayon): rs.parallel.load_json, rs.parallel.read_files, etc.
 /// - Async I/O (tokio): rs.async.fetch, rs.async.read_file, rs.async.write_file, etc.
@@ -57,6 +66,7 @@ pub fn register(
     sandbox: bool,
     tracker: SharedTracker,
     global_password: Option<String>,
+    asset_manifest: AssetManifest,
 ) -> Result<()> {
     let root = project_root.to_path_buf();
 
@@ -77,7 +87,16 @@ pub fn register(
     git::register(lua, &rs_module, &root, sandbox)?;
     content::register(lua, &rs_module, tracker.clone())?;
     images::register(lua, &rs_module, &root, tracker.clone())?;
-    assets::register(lua, &rs_module, &root, tracker.clone())?;
+
+    // Register js, css, fonts as submodules
+    let js_module = js::create_module(lua, &root, tracker.clone())?;
+    rs_module.set("js", js_module)?;
+
+    let css_module = css::create_module(lua, &root, tracker.clone())?;
+    rs_module.set("css", css_module)?;
+
+    let fonts_module = fonts::create_module(lua, &root, tracker.clone())?;
+    rs_module.set("fonts", fonts_module)?;
 
     // Register coro and parallel as submodules
     let coro_module = coro::create_module(lua)?;
@@ -92,6 +111,12 @@ pub fn register(
 
     let crypt_module = crypt::create_module(lua, global_password)?;
     rs_module.set("crypt", crypt_module)?;
+
+    let highlight_module = highlight::create_module(lua)?;
+    rs_module.set("highlight", highlight_module)?;
+
+    let assets_module = assets::create_module(lua, &root, asset_manifest, tracker)?;
+    rs_module.set("assets", assets_module)?;
 
     // Register as a preloaded module so require("rs-web") works
     let preload: Table = lua

@@ -9,6 +9,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::lua::{AssetManifest, create_manifest};
 use crate::tracker::{BuildTracker, SharedTracker};
 
 /// Configuration data structure (deserializable from Lua)
@@ -37,6 +38,9 @@ pub struct Config {
 
     // Build dependency tracker
     tracker: SharedTracker,
+
+    // Asset manifest for hashed filenames
+    pub asset_manifest: AssetManifest,
 }
 
 // Provide convenient access to data fields
@@ -139,6 +143,7 @@ impl Config {
             pages_fn: None,
             update_data_fn: None,
             tracker: Arc::new(BuildTracker::disabled()),
+            asset_manifest: create_manifest(),
         }
     }
 
@@ -180,9 +185,19 @@ impl Config {
             .canonicalize()
             .unwrap_or_else(|_| project_root.clone());
 
+        // Create asset manifest early so it can be used in register calls
+        let asset_manifest = create_manifest();
+
         // First pass: register functions without sandbox to load config
-        crate::lua::register(&lua, &project_root, false, tracker.clone(), None)
-            .map_err(|e| anyhow::anyhow!("Failed to register Lua functions: {}", e))?;
+        crate::lua::register(
+            &lua,
+            &project_root,
+            false,
+            tracker.clone(),
+            None,
+            asset_manifest.clone(),
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to register Lua functions: {}", e))?;
 
         // Load and execute the config file
         let content = std::fs::read_to_string(&config_path)
@@ -205,8 +220,15 @@ impl Config {
 
         // Re-register functions with proper sandbox setting if sandbox is enabled
         if sandbox {
-            crate::lua::register(&lua, &project_root, true, tracker.clone(), None)
-                .map_err(|e| anyhow::anyhow!("Failed to register Lua functions: {}", e))?;
+            crate::lua::register(
+                &lua,
+                &project_root,
+                true,
+                tracker.clone(),
+                None,
+                asset_manifest.clone(),
+            )
+            .map_err(|e| anyhow::anyhow!("Failed to register Lua functions: {}", e))?;
         }
 
         // Parse the config table
@@ -265,6 +287,7 @@ impl Config {
             pages_fn,
             update_data_fn,
             tracker,
+            asset_manifest,
         })
     }
 
@@ -504,8 +527,15 @@ mod tests {
     fn test_minimal_lua_config() {
         let lua = Lua::new();
         let root = test_project_root();
-        crate::lua::register(&lua, &root, false, Arc::new(BuildTracker::disabled()), None)
-            .expect("failed to register Lua functions");
+        crate::lua::register(
+            &lua,
+            &root,
+            false,
+            Arc::new(BuildTracker::disabled()),
+            None,
+            create_manifest(),
+        )
+        .expect("failed to register Lua functions");
 
         let config_str = r#"
             return {
@@ -536,8 +566,15 @@ mod tests {
     fn test_lua_helper_functions() {
         let lua = Lua::new();
         let root = test_project_root();
-        crate::lua::register(&lua, &root, false, Arc::new(BuildTracker::disabled()), None)
-            .expect("failed to register Lua functions");
+        crate::lua::register(
+            &lua,
+            &root,
+            false,
+            Arc::new(BuildTracker::disabled()),
+            None,
+            create_manifest(),
+        )
+        .expect("failed to register Lua functions");
 
         // Test file_exists
         let result: bool = lua
@@ -557,8 +594,15 @@ mod tests {
     fn test_sandbox_blocks_outside_access() {
         let lua = Lua::new();
         let root = test_project_root();
-        crate::lua::register(&lua, &root, true, Arc::new(BuildTracker::disabled()), None)
-            .expect("failed to register Lua functions");
+        crate::lua::register(
+            &lua,
+            &root,
+            true,
+            Arc::new(BuildTracker::disabled()),
+            None,
+            create_manifest(),
+        )
+        .expect("failed to register Lua functions");
 
         // Trying to access /etc/passwd should fail with sandbox enabled
         let result = lua
@@ -583,8 +627,15 @@ mod tests {
     fn test_sandbox_allows_project_access() {
         let lua = Lua::new();
         let root = test_project_root();
-        crate::lua::register(&lua, &root, true, Arc::new(BuildTracker::disabled()), None)
-            .expect("failed to register Lua functions");
+        crate::lua::register(
+            &lua,
+            &root,
+            true,
+            Arc::new(BuildTracker::disabled()),
+            None,
+            create_manifest(),
+        )
+        .expect("failed to register Lua functions");
 
         // Accessing files within project should work
         let result: bool = lua

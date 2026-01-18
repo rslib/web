@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tera::{Function, Value};
 
+use crate::lua::{AssetManifest, highlight_code_sync};
 use crate::text::html_to_text;
 use crate::tracker::SharedTracker;
 
@@ -351,8 +352,53 @@ fn convert_code(text: &str) -> String {
     result
 }
 
+/// highlight filter - Syntax highlight code with a specified language
+/// Usage: {{ code | highlight(lang="python") }}
+pub fn highlight_filter(value: &Value, args: &HashMap<String, Value>) -> tera::Result<Value> {
+    let code = value
+        .as_str()
+        .ok_or_else(|| tera::Error::msg("highlight filter requires a string"))?;
+
+    let lang = args.get("lang").and_then(|v| v.as_str()).unwrap_or("text");
+
+    let highlighted = highlight_code_sync(code, lang);
+    Ok(Value::String(highlighted))
+}
+
+/// Create the asset filter that looks up hashed paths from the manifest
+/// Usage: {{ "/styles/main.css" | asset }}
+/// Returns the hashed path if found, otherwise returns the original path
+pub fn make_asset_filter(
+    manifest: AssetManifest,
+) -> impl Fn(&Value, &HashMap<String, Value>) -> tera::Result<Value> {
+    move |value: &Value, _args: &HashMap<String, Value>| {
+        let path = value
+            .as_str()
+            .ok_or_else(|| tera::Error::msg("asset filter requires a string path"))?;
+
+        // Normalize path to have leading slash
+        let normalized = if path.starts_with('/') {
+            path.to_string()
+        } else {
+            format!("/{}", path)
+        };
+
+        // Look up in manifest, return original if not found
+        let result = manifest
+            .get(&normalized)
+            .map(|v| v.clone())
+            .unwrap_or_else(|| path.to_string());
+
+        Ok(Value::String(result))
+    }
+}
+
 /// Register all data functions with Tera
-pub fn register_data_functions(tera: &mut tera::Tera, tracker: Option<SharedTracker>) {
+pub fn register_data_functions(
+    tera: &mut tera::Tera,
+    tracker: Option<SharedTracker>,
+    asset_manifest: Option<AssetManifest>,
+) {
     tera.register_function("load_json", make_load_json(tracker.clone()));
     tera.register_function("read_file", make_read_file(tracker.clone()));
     tera.register_function("read_markdown", make_read_markdown(tracker.clone()));
@@ -361,6 +407,12 @@ pub fn register_data_functions(tera: &mut tera::Tera, tracker: Option<SharedTrac
     tera.register_filter("markdown", markdown_filter);
     tera.register_filter("linebreaks", linebreaks_filter);
     tera.register_filter("html_to_text", html_to_text_filter);
+    tera.register_filter("highlight", highlight_filter);
+
+    // Register asset filter if manifest is provided
+    if let Some(manifest) = asset_manifest {
+        tera.register_filter("asset", make_asset_filter(manifest));
+    }
 }
 
 #[cfg(test)]

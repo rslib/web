@@ -121,6 +121,7 @@ impl Builder {
         let templates = Templates::new(
             &self.resolve_path(&self.config.paths.templates),
             Some(self.tracker.clone()),
+            Some(self.config.asset_manifest.clone()),
         )?;
 
         // Stage 6: Render all pages in parallel
@@ -144,6 +145,9 @@ impl Builder {
 
     /// Save tracked dependencies to cache file
     fn save_cached_deps(&self) -> Result<()> {
+        // Clean up stale files before saving
+        self.cleanup_stale_writes();
+
         let cache_path = self.project_dir.join(CACHE_FILE);
         let deps = CachedDeps::from_tracker(&self.tracker);
         deps.save(&cache_path)
@@ -154,6 +158,67 @@ impl Builder {
             deps.writes.len()
         );
         Ok(())
+    }
+
+    /// Remove files that were written in previous build but not in current build
+    fn cleanup_stale_writes(&self) {
+        let Some(old_deps) = &self.cached_deps else {
+            return;
+        };
+
+        let new_writes = self.tracker.get_writes();
+        let mut removed = 0;
+
+        for old_path in old_deps.writes.keys() {
+            // Only clean up files in output directory
+            if !old_path.starts_with(&self.output_dir) {
+                continue;
+            }
+
+            // If file was written before but not now, it's stale
+            if !new_writes.contains_key(old_path) && old_path.exists() {
+                if let Err(e) = std::fs::remove_file(old_path) {
+                    debug!("Failed to remove stale file {:?}: {}", old_path, e);
+                } else {
+                    debug!("Removed stale file: {:?}", old_path);
+                    removed += 1;
+                }
+            }
+        }
+
+        if removed > 0 {
+            debug!("Cleaned up {} stale files", removed);
+        }
+    }
+
+    /// Remove files that exist in old_writes but not in new_writes
+    fn cleanup_stale_files(
+        &self,
+        old_writes: &std::collections::HashMap<PathBuf, crate::tracker::FileState>,
+        new_writes: &std::collections::HashMap<PathBuf, crate::tracker::FileState>,
+    ) {
+        let mut removed = 0;
+
+        for old_path in old_writes.keys() {
+            // Only clean up files in output directory
+            if !old_path.starts_with(&self.output_dir) {
+                continue;
+            }
+
+            // If file was written before but not now, it's stale
+            if !new_writes.contains_key(old_path) && old_path.exists() {
+                if let Err(e) = std::fs::remove_file(old_path) {
+                    debug!("Failed to remove stale file {:?}: {}", old_path, e);
+                } else {
+                    debug!("Removed stale file: {:?}", old_path);
+                    removed += 1;
+                }
+            }
+        }
+
+        if removed > 0 {
+            rs_print!("Cleaned up {} stale files", removed);
+        }
     }
 
     /// Get files that have changed since last build
@@ -522,6 +587,7 @@ impl Builder {
         let templates = Templates::new(
             &self.resolve_path(&self.config.paths.templates),
             Some(self.tracker.clone()),
+            Some(self.config.asset_manifest.clone()),
         )?;
         let pipeline = Pipeline::from_config(&self.config);
         self.render_pages(&pages, &global_data, &templates, &pipeline)?;
@@ -550,7 +616,11 @@ impl Builder {
 
         // Reload templates and get dependency graph
         let template_dir = self.resolve_path(&self.config.paths.templates);
-        let templates = Templates::new(&template_dir, Some(self.tracker.clone()))?;
+        let templates = Templates::new(
+            &template_dir,
+            Some(self.tracker.clone()),
+            Some(self.config.asset_manifest.clone()),
+        )?;
         let deps = templates.deps();
 
         // Find all affected templates (transitively)
@@ -599,6 +669,10 @@ impl Builder {
         // Re-render only affected pages with cached data
         self.render_pages(&pages_to_rebuild, &global_data, &templates, &pipeline)?;
 
+        // Merge thread-local tracking data and save (cleanup stale files)
+        self.tracker.merge_all_threads();
+        self.save_cached_deps()?;
+
         rs_print!(
             "Re-rendered {} of {} pages (templates changed)",
             pages_to_rebuild.len(),
@@ -612,11 +686,21 @@ impl Builder {
         rs_print!("  Changed: styles");
         self.config.call_before_build()?;
         rs_print!("Rebuilt CSS");
+
+        // Merge thread-local tracking data and save
+        self.tracker.merge_all_threads();
+        self.save_cached_deps()?;
+
         Ok(())
     }
 
-    /// Rebuild assets by calling before_build hook (re-copies static files)
-    fn rebuild_assets_only(&self, changed_paths: &[PathBuf]) -> Result<()> {
+    /// Rebuild assets by calling before_build hook and re-rendering pages
+    /// Pages need to be re-rendered because asset hashes may have changed
+    fn rebuild_assets_only(&mut self, changed_paths: &[PathBuf]) -> Result<()> {
+        // Save old writes before clearing to find stale files later
+        let old_writes = self.tracker.get_writes();
+        self.tracker.clear_writes();
+
         for path in changed_paths {
             if let Ok(rel) = path.strip_prefix(&self.project_dir) {
                 rs_print!("  Changed: {}", rel.display());
@@ -624,8 +708,37 @@ impl Builder {
                 rs_print!("  Changed: {}", path.display());
             }
         }
+        // Run before_build which rebuilds assets and updates the manifest
         self.config.call_before_build()?;
-        rs_print!("Rebuilt {} assets", changed_paths.len());
+
+        // Re-render all pages since asset paths may have changed
+        // (the asset filter uses the manifest which was just updated)
+        if let (Some(global_data), Some(pages)) = (&self.cached_global_data, &self.cached_pages) {
+            let templates = Templates::new(
+                &self.resolve_path(&self.config.paths.templates),
+                Some(self.tracker.clone()),
+                Some(self.config.asset_manifest.clone()),
+            )?;
+            let pipeline = Pipeline::from_config(&self.config);
+            self.render_pages(pages, global_data, &templates, &pipeline)?;
+            rs_print!(
+                "Rebuilt {} assets, re-rendered {} pages",
+                changed_paths.len(),
+                pages.len()
+            );
+        } else {
+            rs_print!("Rebuilt {} assets", changed_paths.len());
+        }
+
+        // Merge thread-local tracking data
+        self.tracker.merge_all_threads();
+
+        // Find and delete stale files (in old_writes but not in new_writes)
+        let new_writes = self.tracker.get_writes();
+        self.cleanup_stale_files(&old_writes, &new_writes);
+
+        self.save_cached_deps()?;
+
         Ok(())
     }
 

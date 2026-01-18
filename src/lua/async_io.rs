@@ -283,6 +283,24 @@ impl AsyncIOTask {
             completed: Arc::new(Mutex::new(false)),
         }
     }
+
+    /// Create a new AsyncIOTask from a JoinHandle that returns Result<String, String>
+    pub fn from_string_handle(handle: JoinHandle<std::result::Result<String, String>>) -> Self {
+        // Wrap the handle to convert Result<String, String> to IOResult
+        let wrapped_handle = runtime().spawn(async move {
+            match handle.await {
+                Ok(Ok(s)) => Ok(IOResponse::String(s)),
+                Ok(Err(e)) => Err(e),
+                Err(e) => Err(format!("Task panicked: {}", e)),
+            }
+        });
+
+        Self {
+            handle: Arc::new(Mutex::new(Some(wrapped_handle))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        }
+    }
 }
 
 impl Clone for AsyncIOTask {
@@ -1083,9 +1101,9 @@ pub fn create_module(
 
             match tokio::fs::write(&resolved, &content).await {
                 Ok(()) => {
-                    // Track the write
+                    // Track the write (use async variant for tokio context)
                     let canonical = resolved.canonicalize().unwrap_or(resolved);
-                    tracker.record_write(canonical, &content_bytes);
+                    tracker.record_write_async(canonical, &content_bytes);
                     Ok(IOResponse::Ok)
                 }
                 Err(e) => Err(format!("Failed to write file: {}", e)),
@@ -1123,9 +1141,9 @@ pub fn create_module(
 
             match tokio::fs::write(&resolved, &bytes).await {
                 Ok(()) => {
-                    // Track the write
+                    // Track the write (use async variant for tokio context)
                     let canonical = resolved.canonicalize().unwrap_or(resolved);
-                    tracker.record_write(canonical, &bytes);
+                    tracker.record_write_async(canonical, &bytes);
                     Ok(IOResponse::Ok)
                 }
                 Err(e) => Err(format!("Failed to write file: {}", e)),
@@ -1296,13 +1314,13 @@ pub fn create_module(
 
             match tokio::fs::copy(&src_resolved, &dst_resolved).await {
                 Ok(bytes) => {
-                    // Track the read and write
+                    // Track the read and write (use async variants for tokio context)
                     if let Ok(ref content) = content {
                         let src_canonical = src_resolved.canonicalize().unwrap_or(src_resolved);
-                        tracker.record_read(src_canonical, content);
+                        tracker.record_read_async(src_canonical, content);
 
                         let dst_canonical = dst_resolved.canonicalize().unwrap_or(dst_resolved);
-                        tracker.record_write(dst_canonical, content);
+                        tracker.record_write_async(dst_canonical, content);
                     }
                     Ok(IOResponse::Bytes(bytes))
                 }

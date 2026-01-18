@@ -1,7 +1,33 @@
 use anyhow::{Context, Result};
+use lightningcss::printer::PrinterOptions;
+use lightningcss::stylesheet::{MinifyOptions, ParserOptions, StyleSheet};
+use lightningcss::targets::Targets;
 use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Minify CSS content using LightningCSS
+pub fn minify_css(css: &str) -> Result<String, String> {
+    let stylesheet = StyleSheet::parse(css, ParserOptions::default())
+        .map_err(|e| format!("CSS parse error: {:?}", e))?;
+
+    let mut stylesheet = stylesheet;
+    stylesheet
+        .minify(MinifyOptions {
+            targets: Targets::default(),
+            ..Default::default()
+        })
+        .map_err(|e| format!("CSS minify error: {:?}", e))?;
+
+    let result = stylesheet
+        .to_css(PrinterOptions {
+            minify: true,
+            ..Default::default()
+        })
+        .map_err(|e| format!("CSS print error: {:?}", e))?;
+
+    Ok(result.code)
+}
 
 /// Build and minify CSS files
 pub fn build_css<P: AsRef<Path>>(styles_dir: P, output_path: P, minify: bool) -> Result<()> {
@@ -41,9 +67,7 @@ pub fn build_css<P: AsRef<Path>>(styles_dir: P, output_path: P, minify: bool) ->
 
     // Minify if requested
     let output = if minify {
-        minifier::css::minify(&css_buffer)
-            .map_err(|e| anyhow::anyhow!("CSS minification failed: {}", e))?
-            .to_string()
+        minify_css(&css_buffer).map_err(|e| anyhow::anyhow!("{}", e))?
     } else {
         css_buffer
     };
