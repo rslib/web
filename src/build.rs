@@ -132,7 +132,6 @@ impl Builder {
         info!("Build complete: {} pages generated", pages.len());
         rs_print!("Generated {} pages", pages.len());
 
-        // Run after_build hook
         trace!("Running after_build hook");
         self.config.call_after_build()?;
 
@@ -596,6 +595,8 @@ impl Builder {
         self.tracker.merge_all_threads();
         self.save_cached_deps()?;
 
+        self.config.call_after_build()?;
+
         rs_print!("Re-rendered {} pages (content changed)", pages.len());
         Ok(())
     }
@@ -673,6 +674,8 @@ impl Builder {
         self.tracker.merge_all_threads();
         self.save_cached_deps()?;
 
+        self.config.call_after_build()?;
+
         rs_print!(
             "Re-rendered {} of {} pages (templates changed)",
             pages_to_rebuild.len(),
@@ -690,6 +693,8 @@ impl Builder {
         // Merge thread-local tracking data and save
         self.tracker.merge_all_threads();
         self.save_cached_deps()?;
+
+        self.config.call_after_build()?;
 
         Ok(())
     }
@@ -738,6 +743,8 @@ impl Builder {
         self.cleanup_stale_files(&old_writes, &new_writes);
 
         self.save_cached_deps()?;
+
+        self.config.call_after_build()?;
 
         Ok(())
     }

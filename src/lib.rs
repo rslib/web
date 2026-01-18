@@ -126,6 +126,14 @@
 //! - `manifest()` - Get all path mappings
 //! - `clear()` - Clear the manifest
 //!
+//! **PWA (rs.pwa):**
+//! - `manifest(options)` - Generate web app manifest.json (async)
+//! - `service_worker(options)` - Generate service worker sw.js (async)
+//!
+//! **SEO (rs.seo):**
+//! - `sitemap(options)` - Generate XML sitemap (async)
+//! - `robots(options)` - Generate robots.txt (async)
+//!
 //! **Text Processing:**
 //! - `slugify(text)` - Convert text to URL-friendly slug
 //! - `word_count(text)` - Count words in text

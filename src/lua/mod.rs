@@ -25,6 +25,7 @@ mod markdown_context;
 mod parallel;
 mod pwa;
 mod search;
+mod seo;
 mod text;
 mod types;
 
@@ -58,6 +59,7 @@ use std::path::Path;
 /// - Fonts: rs.fonts.download_google_font
 /// - Assets: rs.assets.hash, rs.assets.write_hashed, rs.assets.get_path
 /// - PWA: rs.pwa.manifest, rs.pwa.service_worker
+/// - SEO: rs.seo.sitemap, rs.seo.robots
 /// - Coroutines: rs.coro.task, rs.coro.await, rs.coro.yield, etc.
 /// - Parallel (rayon): rs.parallel.load_json, rs.parallel.read_files, etc.
 /// - Async I/O (tokio): rs.async.fetch, rs.async.read_file, rs.async.write_file, etc.
@@ -120,8 +122,11 @@ pub fn register(
     let assets_module = assets::create_module(lua, &root, asset_manifest, tracker.clone())?;
     rs_module.set("assets", assets_module)?;
 
-    let pwa_module = pwa::create_module(lua, &root, tracker)?;
+    let pwa_module = pwa::create_module(lua, &root, tracker.clone())?;
     rs_module.set("pwa", pwa_module)?;
+
+    let seo_module = seo::create_module(lua, &root, tracker)?;
+    rs_module.set("seo", seo_module)?;
 
     // Register as a preloaded module so require("rs-web") works
     let preload: Table = lua

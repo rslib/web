@@ -193,6 +193,20 @@ Available in `config.lua`:
 | `rs.assets.manifest()` | Get table of all path mappings |
 | `rs.assets.clear()` | Clear the manifest |
 
+**PWA (rs.pwa):**
+
+| Function | Description |
+|----------|-------------|
+| `rs.pwa.manifest(options)` | Generate web app manifest.json (async) |
+| `rs.pwa.service_worker(options)` | Generate service worker sw.js with caching strategies (async) |
+
+**SEO (rs.seo):**
+
+| Function | Description |
+|----------|-------------|
+| `rs.seo.sitemap(options)` | Generate XML sitemap (async) |
+| `rs.seo.robots(options)` | Generate robots.txt (async) |
+
 **Tera Filter:**
 
 Use `| asset` in templates to resolve hashed asset paths:

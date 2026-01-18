@@ -744,6 +744,100 @@ pub static LUA_CLASSES: &[LuaClass] = &[
             },
         ],
     },
+    // SEO
+    LuaClass {
+        name: "SitemapPage",
+        description: "Page entry for sitemap",
+        fields: &[
+            LuaField {
+                name: "path",
+                typ: "string",
+                description: "Page URL path",
+            },
+            LuaField {
+                name: "lastmod",
+                typ: "string?",
+                description: "Last modification date (YYYY-MM-DD)",
+            },
+            LuaField {
+                name: "changefreq",
+                typ: "string?",
+                description: "Change frequency (always|hourly|daily|weekly|monthly|yearly|never)",
+            },
+            LuaField {
+                name: "priority",
+                typ: "number?",
+                description: "Priority 0.0-1.0",
+            },
+        ],
+    },
+    LuaClass {
+        name: "SitemapOptions",
+        description: "Options for seo.sitemap",
+        fields: &[
+            LuaField {
+                name: "base_url",
+                typ: "string",
+                description: "Base URL for sitemap (e.g., 'https://example.com')",
+            },
+            LuaField {
+                name: "pages",
+                typ: "(string|SitemapPage)[]",
+                description: "Array of page paths or page objects",
+            },
+            LuaField {
+                name: "output",
+                typ: "string",
+                description: "Output path for sitemap.xml",
+            },
+            LuaField {
+                name: "default_changefreq",
+                typ: "string?",
+                description: "Default change frequency for pages",
+            },
+            LuaField {
+                name: "default_priority",
+                typ: "number?",
+                description: "Default priority for pages (0.0-1.0)",
+            },
+            LuaField {
+                name: "exclude",
+                typ: "string[]?",
+                description: "Patterns to exclude from sitemap",
+            },
+        ],
+    },
+    LuaClass {
+        name: "RobotsOptions",
+        description: "Options for seo.robots",
+        fields: &[
+            LuaField {
+                name: "output",
+                typ: "string",
+                description: "Output path for robots.txt",
+            },
+            LuaField {
+                name: "sitemap_url",
+                typ: "string?",
+                description: "URL to sitemap.xml",
+            },
+            LuaField {
+                name: "user_agent",
+                typ: "string?",
+                description: "User agent (default: '*')",
+            },
+            LuaField {
+                name: "allow",
+                typ: "string[]?",
+                description: "Allowed paths",
+            },
+            LuaField {
+                name: "disallow",
+                typ: "string[]?",
+                description: "Disallowed paths",
+            },
+        ],
+    },
 ];
 
 // ============================================================================
@@ -2447,6 +2541,31 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         }],
         returns: "AsyncHandle",
     },
+    // SEO MODULE
+    LuaFunction {
+        name: "sitemap",
+        module: Some("seo"),
+        description: "Generate XML sitemap (async)",
+        params: &[LuaParam {
+            name: "options",
+            typ: "SitemapOptions",
+            description: "Sitemap options",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+    },
+    LuaFunction {
+        name: "robots",
+        module: Some("seo"),
+        description: "Generate robots.txt (async)",
+        params: &[LuaParam {
+            name: "options",
+            typ: "RobotsOptions",
+            description: "Robots options",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+    },
 ];
 
 // ============================================================================
@@ -2493,6 +2612,7 @@ pub fn generate_emmylua() -> String {
     let mut crypt_fns: Vec<&LuaFunction> = Vec::new();
     let mut assets_fns: Vec<&LuaFunction> = Vec::new();
     let mut pwa_fns: Vec<&LuaFunction> = Vec::new();
+    let mut seo_fns: Vec<&LuaFunction> = Vec::new();
 
     for func in LUA_FUNCTIONS {
         match func.module {
@@ -2503,6 +2623,7 @@ pub fn generate_emmylua() -> String {
             Some("crypt") => crypt_fns.push(func),
             Some("assets") => assets_fns.push(func),
             Some("pwa") => pwa_fns.push(func),
+            Some("seo") => seo_fns.push(func),
             _ => global_fns.push(func),
         }
     }
@@ -2663,6 +2784,32 @@ pub fn generate_emmylua() -> String {
     }
     output.push('\n');
 
+    // Generate seo submodule class
+    output.push_str(
+        "-- =============================================================================\n",
+    );
+    output.push_str("-- SEO SUBMODULE\n");
+    output.push_str(
+        "-- =============================================================================\n\n",
+    );
+    output.push_str("---@class RsSeoModule\n");
+    for func in &seo_fns {
+        let params = func
+            .params
+            .iter()
+            .map(|p| {
+                let opt = if p.optional { "?" } else { "" };
+                format!("{}{}: {}", p.name, opt, p.typ)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!(
+            "---@field {} fun({}): {} {}\n",
+            func.name, params, func.returns, func.description
+        ));
+    }
+    output.push('\n');
+
     // Generate main rs module class
     output.push_str(
         "-- =============================================================================\n",
@@ -2681,6 +2828,7 @@ pub fn generate_emmylua() -> String {
     output.push_str("---@field crypt RsCryptModule Encryption functions (AES-256-GCM)\n");
     output.push_str("---@field assets RsAssetsModule Asset hashing and manifest\n");
     output.push_str("---@field pwa RsPwaModule PWA (manifest and service worker)\n");
+    output.push_str("---@field seo RsSeoModule SEO (sitemap and robots.txt)\n");
 
     // Add all global functions as fields
     for func in &global_fns {
@@ -2734,139 +2882,55 @@ pub fn generate_emmylua() -> String {
         output.push_str(&format!("function rs.{}({}) end\n\n", func.name, params));
     }
 
-    // Coro submodule stubs
-    output.push_str("-- Coro submodule\n");
-    output.push_str("rs.coro = {}\n\n");
+    // Submodule stubs - generate all using a common pattern
+    let submodules: &[(&str, &str, &[&LuaFunction])] = &[
+        ("coro", "Coro submodule", &coro_fns),
+        ("parallel", "Parallel submodule", &parallel_fns),
+        ("async", "Async submodule (tokio-backed)", &async_fns),
+        (
+            "crypt",
+            "Crypt submodule (AES-256-GCM encryption)",
+            &crypt_fns,
+        ),
+        (
+            "assets",
+            "Assets submodule (hashing and manifest)",
+            &assets_fns,
+        ),
+        (
+            "pwa",
+            "PWA submodule (manifest and service worker)",
+            &pwa_fns,
+        ),
+        ("seo", "SEO submodule (sitemap and robots.txt)", &seo_fns),
+    ];
 
-    for func in &coro_fns {
-        output.push_str(&format!("---{}\n", func.description));
-        for param in func.params {
-            let opt = if param.optional { "?" } else { "" };
+    for (module_name, comment, funcs) in submodules {
+        output.push_str(&format!("-- {}\n", comment));
+        output.push_str(&format!("rs.{} = {{}}\n\n", module_name));
+
+        for func in *funcs {
+            output.push_str(&format!("---{}\n", func.description));
+            for param in func.params {
+                let opt = if param.optional { "?" } else { "" };
+                output.push_str(&format!(
+                    "---@param {}{} {} {}\n",
+                    param.name, opt, param.typ, param.description
+                ));
+            }
+            output.push_str(&format!("---@return {}\n", func.returns));
+
+            let params = func
+                .params
+                .iter()
+                .map(|p| p.name.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             output.push_str(&format!(
-                "---@param {}{} {} {}\n",
-                param.name, opt, param.typ, param.description
+                "function rs.{}.{}({}) end\n\n",
+                module_name, func.name, params
             ));
         }
-        output.push_str(&format!("---@return {}\n", func.returns));
-
-        let params = func
-            .params
-            .iter()
-            .map(|p| p.name.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        output.push_str(&format!(
-            "function rs.coro.{}({}) end\n\n",
-            func.name, params
-        ));
-    }
-
-    // Parallel submodule stubs
-    output.push_str("-- Parallel submodule\n");
-    output.push_str("rs.parallel = {}\n\n");
-
-    for func in &parallel_fns {
-        output.push_str(&format!("---{}\n", func.description));
-        for param in func.params {
-            let opt = if param.optional { "?" } else { "" };
-            output.push_str(&format!(
-                "---@param {}{} {} {}\n",
-                param.name, opt, param.typ, param.description
-            ));
-        }
-        output.push_str(&format!("---@return {}\n", func.returns));
-
-        let params = func
-            .params
-            .iter()
-            .map(|p| p.name.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        output.push_str(&format!(
-            "function rs.parallel.{}({}) end\n\n",
-            func.name, params
-        ));
-    }
-
-    // Async submodule stubs
-    output.push_str("-- Async submodule (tokio-backed)\n");
-    output.push_str("rs.async = {}\n\n");
-
-    for func in &async_fns {
-        output.push_str(&format!("---{}\n", func.description));
-        for param in func.params {
-            let opt = if param.optional { "?" } else { "" };
-            output.push_str(&format!(
-                "---@param {}{} {} {}\n",
-                param.name, opt, param.typ, param.description
-            ));
-        }
-        output.push_str(&format!("---@return {}\n", func.returns));
-
-        let params = func
-            .params
-            .iter()
-            .map(|p| p.name.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        output.push_str(&format!(
-            "function rs.async.{}({}) end\n\n",
-            func.name, params
-        ));
-    }
-
-    // Crypt submodule stubs
-    output.push_str("-- Crypt submodule (AES-256-GCM encryption)\n");
-    output.push_str("rs.crypt = {}\n\n");
-
-    for func in &crypt_fns {
-        output.push_str(&format!("---{}\n", func.description));
-        for param in func.params {
-            let opt = if param.optional { "?" } else { "" };
-            output.push_str(&format!(
-                "---@param {}{} {} {}\n",
-                param.name, opt, param.typ, param.description
-            ));
-        }
-        output.push_str(&format!("---@return {}\n", func.returns));
-
-        let params = func
-            .params
-            .iter()
-            .map(|p| p.name.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        output.push_str(&format!(
-            "function rs.crypt.{}({}) end\n\n",
-            func.name, params
-        ));
-    }
-
-    // Assets submodule stubs
-    output.push_str("-- Assets submodule (hashing and manifest)\n");
-    output.push_str("rs.assets = {}\n\n");
-
-    for func in &assets_fns {
-        output.push_str(&format!("---{}\n", func.description));
-        for param in func.params {
-            let opt = if param.optional { "?" } else { "" };
-            output.push_str(&format!(
-                "---@param {}{} {} {}\n",
-                param.name, opt, param.typ, param.description
-            ));
-        }
-        output.push_str(&format!("---@return {}\n", func.returns));
-
-        let params = func
-            .params
-            .iter()
-            .map(|p| p.name.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        output.push_str(&format!(
-            "function rs.assets.{}({}) end\n\n",
-            func.name, params
-        ));
     }
 
     output.push_str("return rs\n");
@@ -2901,7 +2965,8 @@ pub fn generate_markdown() -> String {
     output.push_str("- [Async Module](#async-module)\n");
     output.push_str("- [Crypt Module](#crypt-module)\n");
     output.push_str("- [Assets Module](#assets-module)\n");
-    output.push_str("- [PWA Module](#pwa-module)\n\n");
+    output.push_str("- [PWA Module](#pwa-module)\n");
+    output.push_str("- [SEO Module](#seo-module)\n\n");
 
     // Types section
     output.push_str("## Types\n\n");
@@ -3026,139 +3091,70 @@ pub fn generate_markdown() -> String {
         }
     }
 
-    // Coro module
-    output.push_str("## Coro Module\n\n");
-    output.push_str("Coroutine-based cooperative multitasking helpers.\n\n");
-    for func in LUA_FUNCTIONS.iter().filter(|f| f.module == Some("coro")) {
-        output.push_str(&format!("### `rs.coro.{}()`\n\n", func.name));
-        output.push_str(&format!("{}\n\n", func.description));
+    // Module documentation - generate all using a common pattern
+    let md_modules: &[(&str, &str, &str)] = &[
+        (
+            "coro",
+            "Coro Module",
+            "Coroutine-based cooperative multitasking helpers.",
+        ),
+        (
+            "parallel",
+            "Parallel Module",
+            "True parallel processing with Rayon.",
+        ),
+        (
+            "async",
+            "Async Module",
+            "Async I/O operations backed by Tokio.",
+        ),
+        (
+            "crypt",
+            "Crypt Module",
+            "Encryption functions using AES-256-GCM with Argon2id key derivation.",
+        ),
+        (
+            "assets",
+            "Assets Module",
+            "Asset hashing for cache busting. Use with Tera `| asset` filter.",
+        ),
+        (
+            "pwa",
+            "PWA Module",
+            "Progressive Web App support: manifest and service worker generation.",
+        ),
+        (
+            "seo",
+            "SEO Module",
+            "SEO support: sitemap and robots.txt generation.",
+        ),
+    ];
 
-        if !func.params.is_empty() {
-            output.push_str("**Parameters:**\n\n");
-            for param in func.params {
-                let opt = if param.optional { " (optional)" } else { "" };
-                output.push_str(&format!(
-                    "- `{}`: `{}`{} - {}\n",
-                    param.name, param.typ, opt, param.description
-                ));
+    for (module_key, title, description) in md_modules {
+        output.push_str(&format!("## {}\n\n", title));
+        output.push_str(&format!("{}\n\n", description));
+
+        for func in LUA_FUNCTIONS
+            .iter()
+            .filter(|f| f.module == Some(*module_key))
+        {
+            output.push_str(&format!("### `rs.{}.{}()`\n\n", module_key, func.name));
+            output.push_str(&format!("{}\n\n", func.description));
+
+            if !func.params.is_empty() {
+                output.push_str("**Parameters:**\n\n");
+                for param in func.params {
+                    let opt = if param.optional { " (optional)" } else { "" };
+                    output.push_str(&format!(
+                        "- `{}`: `{}`{} - {}\n",
+                        param.name, param.typ, opt, param.description
+                    ));
+                }
+                output.push('\n');
             }
-            output.push('\n');
+
+            output.push_str(&format!("**Returns:** `{}`\n\n", func.returns));
         }
-
-        output.push_str(&format!("**Returns:** `{}`\n\n", func.returns));
-    }
-
-    // Parallel module
-    output.push_str("## Parallel Module\n\n");
-    output.push_str("True parallel processing with Rayon.\n\n");
-    for func in LUA_FUNCTIONS
-        .iter()
-        .filter(|f| f.module == Some("parallel"))
-    {
-        output.push_str(&format!("### `rs.parallel.{}()`\n\n", func.name));
-        output.push_str(&format!("{}\n\n", func.description));
-
-        if !func.params.is_empty() {
-            output.push_str("**Parameters:**\n\n");
-            for param in func.params {
-                let opt = if param.optional { " (optional)" } else { "" };
-                output.push_str(&format!(
-                    "- `{}`: `{}`{} - {}\n",
-                    param.name, param.typ, opt, param.description
-                ));
-            }
-            output.push('\n');
-        }
-
-        output.push_str(&format!("**Returns:** `{}`\n\n", func.returns));
-    }
-
-    // Async module
-    output.push_str("## Async Module\n\n");
-    output.push_str("Async I/O operations backed by Tokio.\n\n");
-    for func in LUA_FUNCTIONS.iter().filter(|f| f.module == Some("async")) {
-        output.push_str(&format!("### `rs.async.{}()`\n\n", func.name));
-        output.push_str(&format!("{}\n\n", func.description));
-
-        if !func.params.is_empty() {
-            output.push_str("**Parameters:**\n\n");
-            for param in func.params {
-                let opt = if param.optional { " (optional)" } else { "" };
-                output.push_str(&format!(
-                    "- `{}`: `{}`{} - {}\n",
-                    param.name, param.typ, opt, param.description
-                ));
-            }
-            output.push('\n');
-        }
-
-        output.push_str(&format!("**Returns:** `{}`\n\n", func.returns));
-    }
-
-    // Crypt module
-    output.push_str("## Crypt Module\n\n");
-    output.push_str("Encryption functions using AES-256-GCM with Argon2id key derivation.\n\n");
-    for func in LUA_FUNCTIONS.iter().filter(|f| f.module == Some("crypt")) {
-        output.push_str(&format!("### `rs.crypt.{}()`\n\n", func.name));
-        output.push_str(&format!("{}\n\n", func.description));
-
-        if !func.params.is_empty() {
-            output.push_str("**Parameters:**\n\n");
-            for param in func.params {
-                let opt = if param.optional { " (optional)" } else { "" };
-                output.push_str(&format!(
-                    "- `{}`: `{}`{} - {}\n",
-                    param.name, param.typ, opt, param.description
-                ));
-            }
-            output.push('\n');
-        }
-
-        output.push_str(&format!("**Returns:** `{}`\n\n", func.returns));
-    }
-
-    // Assets module
-    output.push_str("## Assets Module\n\n");
-    output.push_str("Asset hashing for cache busting. Use with Tera `| asset` filter.\n\n");
-    for func in LUA_FUNCTIONS.iter().filter(|f| f.module == Some("assets")) {
-        output.push_str(&format!("### `rs.assets.{}()`\n\n", func.name));
-        output.push_str(&format!("{}\n\n", func.description));
-
-        if !func.params.is_empty() {
-            output.push_str("**Parameters:**\n\n");
-            for param in func.params {
-                let opt = if param.optional { " (optional)" } else { "" };
-                output.push_str(&format!(
-                    "- `{}`: `{}`{} - {}\n",
-                    param.name, param.typ, opt, param.description
-                ));
-            }
-            output.push('\n');
-        }
-
-        output.push_str(&format!("**Returns:** `{}`\n\n", func.returns));
-    }
-
-    // PWA Module
-    output.push_str("## PWA Module\n\n");
-    output.push_str("Progressive Web App support: manifest and service worker generation.\n\n");
-    for func in LUA_FUNCTIONS.iter().filter(|f| f.module == Some("pwa")) {
-        output.push_str(&format!("### `rs.pwa.{}()`\n\n", func.name));
-        output.push_str(&format!("{}\n\n", func.description));
-
-        if !func.params.is_empty() {
-            output.push_str("**Parameters:**\n\n");
-            for param in func.params {
-                let opt = if param.optional { " (optional)" } else { "" };
-                output.push_str(&format!(
-                    "- `{}`: `{}`{} - {}\n",
-                    param.name, param.typ, opt, param.description
-                ));
-            }
-            output.push('\n');
-        }
-
-        output.push_str(&format!("**Returns:** `{}`\n\n", func.returns));
     }
 
     output
