@@ -189,11 +189,13 @@
 //! - `print(...)` - Log output to build log
 //! - `git_info(path?)` - Get git info (hash, branch, author, date, dirty)
 //!
-//! **Parallel (rs.parallel):** Rayon-backed parallel operations
+//! **Parallel (rs.parallel):** Rayon-backed true parallel operations
 //! - `load_json(paths)` / `load_yaml(paths)` - Load multiple files in parallel
 //! - `read_files(paths)` / `read_frontmatter(paths)` - Read multiple files
 //! - `create_dirs(paths)` / `copy_files(sources, dests)` - Parallel file operations
 //! - `image_convert(sources, dests, opts?)` - Convert images in parallel
+//! - `map(items, fn, ctx?)` / `filter(items, fn, ctx?)` - Parallel map/filter with explicit context
+//! - `map_seq(items, fn)` / `filter_seq(items, fn)` - Sequential fallbacks for non-serializable items
 //!
 //! **Async I/O (rs.async):** All return handles, await with `rs.async.await(task)` or `rs.async.await_all(tasks)`
 //! - `fetch(url, opts?)` / `fetch_bytes(url, opts?)` - HTTP fetch (text/binary)

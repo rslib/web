@@ -2,7 +2,7 @@
 //!
 //! All functions return handles that must be awaited with rs.async.await() or rs.async.await_all().
 
-use mlua::{Lua, LuaSerdeExt, Result, Table, UserData, UserDataMethods, Value};
+use mlua::{Function, Lua, LuaSerdeExt, Result, Table, UserData, UserDataMethods, Value};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -314,6 +314,36 @@ impl Clone for AsyncIOTask {
 }
 
 impl UserData for AsyncIOTask {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("is_completed", |_, this, _: ()| Ok(*this.completed.lock()));
+    }
+}
+
+/// Result type for wrapped Lua function operations
+type LuaFnResult = std::result::Result<super::portable::LuaPortable, String>;
+
+/// Async task handle for wrapped Lua functions
+/// These functions are executed when awaited (deferred execution)
+pub struct AsyncLuaTask {
+    /// Registry key for the stored function
+    func_key: Arc<Mutex<Option<mlua::RegistryKey>>>,
+    /// Serialized result after execution
+    result: Arc<Mutex<Option<LuaFnResult>>>,
+    /// Whether the task has been executed
+    completed: Arc<Mutex<bool>>,
+}
+
+impl Clone for AsyncLuaTask {
+    fn clone(&self) -> Self {
+        Self {
+            func_key: Arc::clone(&self.func_key),
+            result: Arc::clone(&self.result),
+            completed: Arc::clone(&self.completed),
+        }
+    }
+}
+
+impl UserData for AsyncLuaTask {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("is_completed", |_, this, _: ()| Ok(*this.completed.lock()));
     }
@@ -763,7 +793,21 @@ pub fn create_module(
     })?;
     async_module.set("spawn", spawn)?;
 
-    // async.await(task) - Await a spawned task (handles both AsyncTask and AsyncBytesTask)
+    // async.wrap(fn) - Wrap a Lua function for deferred execution with await/await_all
+    // The function is executed when awaited, not when wrapped
+    let wrap_fn = lua.create_function(|lua, func: Function| {
+        // Store function in registry (prevents GC, allows later retrieval)
+        let key = lua.create_registry_value(func)?;
+
+        Ok(AsyncLuaTask {
+            func_key: Arc::new(Mutex::new(Some(key))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        })
+    })?;
+    async_module.set("wrap", wrap_fn)?;
+
+    // async.await(task) - Await a spawned task (handles AsyncTask, AsyncBytesTask, AsyncIOTask, AsyncLuaTask)
     let await_fn = lua.create_function(|lua, ud: mlua::AnyUserData| {
         // Try AsyncTask first (text fetch)
         if let Ok(task) = ud.borrow::<AsyncTask>() {
@@ -882,9 +926,60 @@ pub fn create_module(
                     "Task handle already consumed".to_string(),
                 ))
             }
+        }
+        // Try AsyncLuaTask (wrapped Lua functions)
+        else if let Ok(task) = ud.borrow::<AsyncLuaTask>() {
+            // Check if already completed
+            if *task.completed.lock()
+                && let Some(ref result) = *task.result.lock()
+            {
+                return match result {
+                    Ok(portable) => portable.to_lua(lua),
+                    Err(e) => Err(mlua::Error::RuntimeError(format!(
+                        "Lua function failed: {}",
+                        e
+                    ))),
+                };
+            }
+
+            // Get the function key
+            let func_key = task.func_key.lock().take();
+            drop(task);
+
+            if let Some(key) = func_key {
+                // Retrieve the function from registry
+                let func: Function = lua.registry_value(&key)?;
+
+                // Execute the function
+                let result: Value = func.call(())?;
+
+                // Serialize the result for storage
+                let portable_result =
+                    super::portable::LuaPortable::from_lua(&result, lua).map_err(|e| e.to_string());
+
+                // Store result and mark completed
+                let task = ud.borrow::<AsyncLuaTask>()?;
+                *task.completed.lock() = true;
+                *task.result.lock() = Some(portable_result.clone());
+
+                // Clean up registry
+                lua.remove_registry_value(key)?;
+
+                match portable_result {
+                    Ok(portable) => portable.to_lua(lua),
+                    Err(e) => Err(mlua::Error::RuntimeError(format!(
+                        "Lua function failed: {}",
+                        e
+                    ))),
+                }
+            } else {
+                Err(mlua::Error::RuntimeError(
+                    "Lua function already executed".to_string(),
+                ))
+            }
         } else {
             Err(mlua::Error::RuntimeError(
-                "Expected AsyncTask, AsyncBytesTask, or AsyncIOTask".to_string(),
+                "Expected AsyncTask, AsyncBytesTask, AsyncIOTask, or AsyncLuaTask".to_string(),
             ))
         }
     })?;
@@ -900,6 +995,8 @@ pub fn create_module(
                 Option<BytesFetchResult>,
             ),
             IO(Option<JoinHandle<IOResult>>, Option<IOResult>),
+            // LuaFn stores: (registry_key, already_completed_result)
+            LuaFn(Option<mlua::RegistryKey>, Option<LuaFnResult>),
         }
 
         let mut tasks: Vec<(mlua::AnyUserData, TaskType)> = Vec::new();
@@ -935,15 +1032,25 @@ pub fn create_module(
                 let handle = task.handle.lock().take();
                 drop(task);
                 tasks.push((ud, TaskType::IO(handle, completed_result)));
+            } else if let Ok(task) = ud.borrow::<AsyncLuaTask>() {
+                let completed_result = if *task.completed.lock() {
+                    task.result.lock().clone()
+                } else {
+                    None
+                };
+                let func_key = task.func_key.lock().take();
+                drop(task);
+                tasks.push((ud, TaskType::LuaFn(func_key, completed_result)));
             } else {
                 return Err(mlua::Error::RuntimeError(
-                    "await_all: expected AsyncTask, AsyncBytesTask, or AsyncIOTask".to_string(),
+                    "await_all: expected AsyncTask, AsyncBytesTask, AsyncIOTask, or AsyncLuaTask"
+                        .to_string(),
                 ));
             }
         }
 
-        // Await all handles
-        let results: Vec<_> = block_on(async {
+        // First, await all async handles (Text, Bytes, IO)
+        let async_results: Vec<_> = block_on(async {
             let mut results = Vec::with_capacity(tasks.len());
 
             for (_, task_type) in &mut tasks {
@@ -993,15 +1100,50 @@ pub fn create_module(
                             results.push(TaskType::IO(None, None));
                         }
                     }
+                    // LuaFn tasks are handled outside the async block
+                    TaskType::LuaFn(key, completed) => {
+                        // Just pass through - will be executed below
+                        results.push(TaskType::LuaFn(key.take(), completed.take()));
+                    }
                 }
             }
 
             results
         });
 
+        // Now execute Lua functions (must run on main thread)
+        let mut final_results = Vec::with_capacity(async_results.len());
+        for result in async_results {
+            match result {
+                TaskType::LuaFn(Some(key), None) => {
+                    // Execute the Lua function
+                    let func_result: LuaFnResult = (|| {
+                        let func: Function = lua.registry_value(&key)?;
+                        let result: Value = func.call(())?;
+                        let portable = super::portable::LuaPortable::from_lua(&result, lua)?;
+                        lua.remove_registry_value(key)?;
+                        Ok(portable)
+                    })()
+                    .map_err(|e: mlua::Error| e.to_string());
+
+                    final_results.push(TaskType::LuaFn(None, Some(func_result)));
+                }
+                TaskType::LuaFn(None, Some(completed)) => {
+                    // Already completed
+                    final_results.push(TaskType::LuaFn(None, Some(completed)));
+                }
+                TaskType::LuaFn(Some(key), Some(_)) => {
+                    // Has key but also completed? Clean up key and use completed result
+                    let _ = lua.remove_registry_value(key);
+                    final_results.push(TaskType::LuaFn(None, None));
+                }
+                other => final_results.push(other),
+            }
+        }
+
         // Convert to Lua table
         let result_table = lua.create_table()?;
-        for (i, result) in results.into_iter().enumerate() {
+        for (i, result) in final_results.into_iter().enumerate() {
             match result {
                 TaskType::Text(_, Some(Ok(response))) => {
                     let table = response.to_lua_table(lua)?;
@@ -1015,9 +1157,14 @@ pub fn create_module(
                     let value = response.to_lua_value(lua)?;
                     result_table.set(i + 1, value)?;
                 }
+                TaskType::LuaFn(_, Some(Ok(portable))) => {
+                    let value = portable.to_lua(lua)?;
+                    result_table.set(i + 1, value)?;
+                }
                 TaskType::Text(_, Some(Err(e)))
                 | TaskType::Bytes(_, Some(Err(e)))
-                | TaskType::IO(_, Some(Err(e))) => {
+                | TaskType::IO(_, Some(Err(e)))
+                | TaskType::LuaFn(_, Some(Err(e))) => {
                     let err_table = lua.create_table()?;
                     err_table.set("ok", false)?;
                     err_table.set("error", e)?;

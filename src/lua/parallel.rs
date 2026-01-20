@@ -1,11 +1,34 @@
 //! Parallel processing module (rs.parallel) - rayon-backed parallel operations
 
 use super::helpers::{is_path_within_root, parse_frontmatter_content, resolve_path};
+use super::portable::LuaPortable;
 use crate::tracker::SharedTracker;
 use image::DynamicImage;
 use mlua::{Function, Lua, LuaSerdeExt, Result, Table, Value};
 use rayon::prelude::*;
+use std::cell::RefCell;
 use std::path::Path;
+
+// Thread-local Lua VM for parallel execution
+// Each rayon thread gets its own Lua state
+thread_local! {
+    static WORKER_LUA: RefCell<Option<Lua>> = const { RefCell::new(None) };
+}
+
+/// Get or initialize the thread-local Lua VM
+fn get_or_init_worker_lua() -> &'static Lua {
+    WORKER_LUA.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        if borrow.is_none() {
+            let lua = Lua::new();
+            // Load standard safe libraries (no debug needed - we use explicit context)
+            lua.load_std_libs(mlua::StdLib::ALL_SAFE).ok();
+            *borrow = Some(lua);
+        }
+        // SAFETY: The Lua VM is thread-local and lives for the duration of the thread
+        unsafe { &*(borrow.as_ref().unwrap() as *const Lua) }
+    })
+}
 
 /// Create the parallel module table
 pub fn create_module(
@@ -201,8 +224,91 @@ pub fn create_module(
     })?;
     parallel.set("read_frontmatter", read_frontmatter_parallel)?;
 
-    // parallel.map(items, fn) - Map over items, calling Lua function (sequential fn calls, parallel-ready structure)
-    let map_fn = lua.create_function(|lua, (items, func): (Table, Function)| {
+    // parallel.map(items, fn, ctx?) - True parallel map using thread-local Lua VMs
+    // Items, function, and optional context are serialized, then executed in parallel.
+    // Usage: rs.parallel.map(items, function(item, ctx) ... end, {key = value})
+    // Note: Function upvalues are NOT captured. Pass any needed context explicitly.
+    let map_fn = lua.create_function(
+        |lua, (items, func, ctx): (Table, Function, Option<Table>)| {
+            // Serialize the function to bytecode
+            let portable_func = LuaPortable::from_lua(&Value::Function(func), lua)?;
+
+            // Serialize the context if provided
+            let portable_ctx = match ctx {
+                Some(t) => Some(LuaPortable::from_lua(&Value::Table(t), lua)?),
+                None => None,
+            };
+
+            // Serialize all items
+            let portable_items: Vec<LuaPortable> = items
+                .sequence_values::<Value>()
+                .filter_map(|v| v.ok())
+                .map(|v| LuaPortable::from_lua(&v, lua))
+                .collect::<Result<Vec<_>>>()?;
+
+            // Execute in parallel using rayon
+            let results: Vec<std::result::Result<LuaPortable, String>> = portable_items
+                .par_iter()
+                .map(|item| {
+                    let worker_lua = get_or_init_worker_lua();
+
+                    // Load function from bytecode in this thread's VM
+                    let func_value = portable_func
+                        .to_lua(worker_lua)
+                        .map_err(|e| format!("Failed to load function: {}", e))?;
+                    let func = func_value
+                        .as_function()
+                        .ok_or_else(|| "Expected function".to_string())?;
+
+                    // Convert item to Lua value
+                    let lua_item = item
+                        .to_lua(worker_lua)
+                        .map_err(|e| format!("Failed to convert item: {}", e))?;
+
+                    // Convert context to Lua value (or nil)
+                    let lua_ctx = match &portable_ctx {
+                        Some(ctx) => ctx
+                            .to_lua(worker_lua)
+                            .map_err(|e| format!("Failed to convert context: {}", e))?,
+                        None => Value::Nil,
+                    };
+
+                    // Call function with (item, ctx)
+                    let result: Value = func
+                        .call((lua_item, lua_ctx))
+                        .map_err(|e| format!("Function call failed: {}", e))?;
+
+                    // Convert result back to portable
+                    LuaPortable::from_lua(&result, worker_lua)
+                        .map_err(|e| format!("Failed to serialize result: {}", e))
+                })
+                .collect();
+
+            // Convert back to Lua table
+            let result_table = lua.create_table()?;
+            for (i, result) in results.into_iter().enumerate() {
+                match result {
+                    Ok(portable) => {
+                        let value = portable.to_lua(lua)?;
+                        result_table.set(i + 1, value)?;
+                    }
+                    Err(e) => {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "parallel.map failed at index {}: {}",
+                            i + 1,
+                            e
+                        )));
+                    }
+                }
+            }
+            Ok(result_table)
+        },
+    )?;
+    parallel.set("map", map_fn)?;
+
+    // parallel.map_seq(items, fn) - Sequential map (for non-serializable items)
+    // Use this when items contain userdata or other non-portable values
+    let map_seq_fn = lua.create_function(|lua, (items, func): (Table, Function)| {
         let result_table = lua.create_table()?;
         let mut i = 1;
         for v in items.sequence_values::<Value>().flatten() {
@@ -212,10 +318,96 @@ pub fn create_module(
         }
         Ok(result_table)
     })?;
-    parallel.set("map", map_fn)?;
+    parallel.set("map_seq", map_seq_fn)?;
 
-    // parallel.filter(items, fn) - Filter items using predicate function
-    let filter_fn = lua.create_function(|lua, (items, func): (Table, Function)| {
+    // parallel.filter(items, fn, ctx?) - True parallel filter using thread-local Lua VMs
+    // Usage: rs.parallel.filter(items, function(item, ctx) ... end, {key = value})
+    // Note: Function upvalues are NOT captured. Pass any needed context explicitly.
+    let filter_fn = lua.create_function(
+        |lua, (items, func, ctx): (Table, Function, Option<Table>)| {
+            // Serialize the function to bytecode
+            let portable_func = LuaPortable::from_lua(&Value::Function(func), lua)?;
+
+            // Serialize the context if provided
+            let portable_ctx = match ctx {
+                Some(t) => Some(LuaPortable::from_lua(&Value::Table(t), lua)?),
+                None => None,
+            };
+
+            // Serialize all items with their original indices
+            let portable_items: Vec<(usize, LuaPortable)> = items
+                .sequence_values::<Value>()
+                .enumerate()
+                .filter_map(|(i, v)| v.ok().map(|v| (i, v)))
+                .map(|(i, v)| LuaPortable::from_lua(&v, lua).map(|p| (i, p)))
+                .collect::<Result<Vec<_>>>()?;
+
+            // Execute filter in parallel
+            let results: Vec<std::result::Result<Option<LuaPortable>, String>> = portable_items
+                .par_iter()
+                .map(|(_, item)| {
+                    let worker_lua = get_or_init_worker_lua();
+
+                    // Load function
+                    let func_value = portable_func
+                        .to_lua(worker_lua)
+                        .map_err(|e| format!("Failed to load function: {}", e))?;
+                    let func = func_value
+                        .as_function()
+                        .ok_or_else(|| "Expected function".to_string())?;
+
+                    // Convert item
+                    let lua_item = item
+                        .to_lua(worker_lua)
+                        .map_err(|e| format!("Failed to convert item: {}", e))?;
+
+                    // Convert context to Lua value (or nil)
+                    let lua_ctx = match &portable_ctx {
+                        Some(ctx) => ctx
+                            .to_lua(worker_lua)
+                            .map_err(|e| format!("Failed to convert context: {}", e))?,
+                        None => Value::Nil,
+                    };
+
+                    // Call predicate with (item, ctx)
+                    let keep: bool = func
+                        .call((lua_item, lua_ctx))
+                        .map_err(|e| format!("Filter predicate failed: {}", e))?;
+
+                    if keep {
+                        Ok(Some(item.clone()))
+                    } else {
+                        Ok(None)
+                    }
+                })
+                .collect();
+
+            // Collect kept items maintaining order
+            let result_table = lua.create_table()?;
+            let mut i = 1;
+            for result in results.into_iter() {
+                match result {
+                    Ok(Some(portable)) => {
+                        let value = portable.to_lua(lua)?;
+                        result_table.set(i, value)?;
+                        i += 1;
+                    }
+                    Ok(None) => {} // Filtered out
+                    Err(e) => {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "parallel.filter failed: {}",
+                            e
+                        )));
+                    }
+                }
+            }
+            Ok(result_table)
+        },
+    )?;
+    parallel.set("filter", filter_fn)?;
+
+    // parallel.filter_seq(items, fn) - Sequential filter (for non-serializable items)
+    let filter_seq_fn = lua.create_function(|lua, (items, func): (Table, Function)| {
         let result_table = lua.create_table()?;
         let mut i = 1;
         for v in items.sequence_values::<Value>().flatten() {
@@ -227,7 +419,7 @@ pub fn create_module(
         }
         Ok(result_table)
     })?;
-    parallel.set("filter", filter_fn)?;
+    parallel.set("filter_seq", filter_seq_fn)?;
 
     // parallel.reduce(items, initial, fn) - Reduce items to single value
     let reduce_fn =

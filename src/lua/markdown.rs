@@ -99,6 +99,70 @@ pub fn register(lua: &Lua, rs_module: &Table, tracker: SharedTracker) -> Result<
     })?;
     markdown_module.set("render", render_fn)?;
 
+    // extract_links(content) - Extract links from markdown
+    let extract_links_fn = lua.create_function(|lua, content: String| {
+        use pulldown_cmark::{Event, Parser, Tag};
+        use regex::Regex;
+
+        let mut links = Vec::new();
+
+        let parser = Parser::new(&content);
+        for event in parser {
+            if let Event::Start(Tag::Link { dest_url, .. }) = event {
+                links.push(dest_url.to_string());
+            }
+        }
+
+        let wikilink_re = Regex::new(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]").unwrap();
+        for cap in wikilink_re.captures_iter(&content) {
+            if let Some(page) = cap.get(1) {
+                let slug = page.as_str().trim().to_lowercase().replace(' ', "-");
+                links.push(format!("/{}/", slug));
+            }
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        links.retain(|link| seen.insert(link.clone()));
+
+        let result = lua.create_table()?;
+        for (i, link) in links.iter().enumerate() {
+            result.set(i + 1, link.as_str())?;
+        }
+        Ok(Value::Table(result))
+    })?;
+    markdown_module.set("extract_links", extract_links_fn)?;
+
+    // extract_images(content) - Extract image paths from markdown
+    let extract_images_fn = lua.create_function(|lua, content: String| {
+        use regex::Regex;
+
+        let mut images: Vec<String> = Vec::new();
+
+        let md_re = Regex::new(r"!\[[^\]]*\]\(([^)]+)\)").unwrap();
+        for cap in md_re.captures_iter(&content) {
+            if let Some(path) = cap.get(1) {
+                images.push(path.as_str().to_string());
+            }
+        }
+
+        let wiki_re = Regex::new(r"!\[\[([^\]|]+)(?:\|[^\]]+)?\]\]").unwrap();
+        for cap in wiki_re.captures_iter(&content) {
+            if let Some(path) = cap.get(1) {
+                images.push(path.as_str().trim().to_string());
+            }
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        images.retain(|img| seen.insert(img.clone()));
+
+        let result = lua.create_table()?;
+        for (i, img) in images.iter().enumerate() {
+            result.set(i + 1, img.as_str())?;
+        }
+        Ok(Value::Table(result))
+    })?;
+    markdown_module.set("extract_images", extract_images_fn)?;
+
     rs_module.set("markdown", markdown_module)?;
     Ok(())
 }

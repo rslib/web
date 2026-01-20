@@ -138,29 +138,73 @@ When sandbox is enabled:
 
 #### Lua API Functions
 
-Available in `config.lua`:
+The `rs-web` module must be explicitly required:
 
-**File Operations:**
+```lua
+local rs = require("rs-web")
+```
 
-| Function | Description |
-|----------|-------------|
-| `read_file(path)` | Read file contents, returns nil if not found |
-| `write_file(path, content)` | Write content to file, returns true/false |
-| `copy_file(src, dest)` | Copy file (binary-safe), returns true/false |
-| `file_exists(path)` | Check if file exists |
-| `list_files(path, pattern?)` | List files matching glob pattern |
-| `list_dirs(path)` | List subdirectories |
-| `load_json(path)` | Load and parse JSON file |
-| `load_yaml(path)` | Load and parse YAML file |
-| `load_toml(path)` | Load and parse TOML file |
-| `read_frontmatter(path)` | Extract frontmatter and content from markdown |
+Available functions:
 
-**Content Processing:**
+**File System (rs.fs):**
 
 | Function | Description |
 |----------|-------------|
-| `html_to_text(html)` | Convert HTML to plain text |
-| `rss_date(date_string)` | Format date for RSS (RFC 2822) |
+| `rs.fs.read(path)` | Read file contents, returns nil if not found |
+| `rs.fs.write(path, content)` | Write content to file, returns true/false |
+| `rs.fs.copy(src, dest)` | Copy file (binary-safe), returns true/false |
+| `rs.fs.exists(path)` | Check if file exists |
+| `rs.fs.list(path, pattern?)` | List files matching glob pattern |
+| `rs.fs.list_dirs(path)` | List subdirectories |
+| `rs.fs.glob(pattern)` | Find files matching glob pattern |
+| `rs.fs.scan(dir, pattern?)` | Scan directory recursively |
+
+Parallel file operations:
+| Function | Description |
+|----------|-------------|
+| `rs.fs.par.read(paths)` | Read multiple files in parallel |
+| `rs.fs.par.exists(paths)` | Check multiple files exist in parallel |
+| `rs.fs.par.copy(sources, dests)` | Copy multiple files in parallel |
+| `rs.fs.par.create_dirs(paths)` | Create directories in parallel |
+
+**Data Loading (rs.data):**
+
+| Function | Description |
+|----------|-------------|
+| `rs.data.load_json(path)` | Load and parse JSON file |
+| `rs.data.load_yaml(path)` | Load and parse YAML file |
+| `rs.data.load_toml(path)` | Load and parse TOML file |
+| `rs.data.load_frontmatter(path)` | Extract frontmatter and content from markdown |
+| `rs.data.from_json(str)` | Parse JSON string to Lua value |
+| `rs.data.to_json(value, pretty?)` | Serialize Lua value to JSON string |
+| `rs.data.from_yaml(str)` | Parse YAML string to Lua value |
+| `rs.data.to_yaml(value)` | Serialize Lua value to YAML string |
+| `rs.data.from_toml(str)` | Parse TOML string to Lua value |
+| `rs.data.to_toml(value)` | Serialize Lua value to TOML string |
+
+Parallel data operations:
+| Function | Description |
+|----------|-------------|
+| `rs.data.par.load_json(paths)` | Load multiple JSON files in parallel |
+| `rs.data.par.load_yaml(paths)` | Load multiple YAML files in parallel |
+| `rs.data.par.load_frontmatter(paths)` | Parse frontmatter from multiple files in parallel |
+
+**HTML Processing (rs.html):**
+
+| Function | Description |
+|----------|-------------|
+| `rs.html.to_text(html)` | Convert HTML to plain text |
+| `rs.html.strip_tags(html)` | Remove HTML tags |
+| `rs.html.extract_links(html)` | Extract all links from HTML |
+| `rs.html.extract_images(html)` | Extract all image sources from HTML |
+
+**Date Formatting (rs.date):**
+
+| Function | Description |
+|----------|-------------|
+| `rs.date.format(date, format)` | Format a date string |
+| `rs.date.parse(str)` | Parse date string to table {year, month, day} |
+| `rs.date.rss_format(date_string)` | Format date for RSS (RFC 2822) |
 
 **Markdown (rs.markdown):**
 
@@ -199,20 +243,21 @@ local function highlight_plugin()
 end
 ```
 
-**Image Processing:**
+**Image Processing (rs.image):**
 
 | Function | Description |
 |----------|-------------|
-| `image_dimensions(path)` | Get image width and height |
-| `image_resize(input, output, options)` | Resize image (options: width, height?, quality?) |
-| `image_convert(input, output, options?)` | Convert image format (options: format?, quality?) |
-| `image_optimize(input, output, options?)` | Optimize/compress image (options: quality?) |
+| `rs.image.dimensions(path)` | Get image width and height |
+| `rs.image.resize(input, output, options)` | Resize image (options: width, height?, quality?) |
+| `rs.image.convert(input, output, options?)` | Convert image format (options: format?, quality?) |
+| `rs.image.optimize(input, output, options?)` | Optimize/compress image (options: quality?) |
 
-**Asset Building:**
-
+Parallel image operations:
 | Function | Description |
 |----------|-------------|
-| `check_unused_assets(output_dir)` | Find assets not referenced in HTML output |
+| `rs.image.par.resize(inputs, outputs, options?)` | Resize multiple images in parallel |
+| `rs.image.par.convert(inputs, outputs, options?)` | Convert multiple images in parallel |
+| `rs.image.par.optimize(inputs, outputs, options?)` | Optimize multiple images in parallel |
 
 **Fonts (rs.fonts):**
 
@@ -277,54 +322,79 @@ Use `| asset` in templates to resolve hashed asset paths:
 <script src="{{ '/js/editor.js' | asset }}"></script>
 ```
 
-**Text Processing:**
+**Text Processing (rs.text):**
 
 | Function | Description |
 |----------|-------------|
-| `slugify(text)` | Convert text to URL-friendly slug |
-| `word_count(text)` | Count words in text |
-| `reading_time(text, wpm?)` | Calculate reading time in minutes |
-| `truncate(text, len, suffix?)` | Truncate text with optional suffix |
-| `strip_tags(html)` | Remove HTML tags |
-| `format_date(date, format)` | Format a date string |
-| `parse_date(str)` | Parse date string to table {year, month, day} |
-| `hash(content)` | Hash content (xxHash64) |
-| `hash_file(path)` | Hash file contents |
-| `url_encode(str)` | URL encode a string |
-| `url_decode(str)` | URL decode a string |
+| `rs.text.slugify(text)` | Convert text to URL-friendly slug |
+| `rs.text.word_count(text)` | Count words in text |
+| `rs.text.reading_time(text, wpm?)` | Calculate reading time in minutes |
+| `rs.text.truncate(text, len, suffix?)` | Truncate text with optional suffix |
+| `rs.text.url_encode(str)` | URL encode a string |
+| `rs.text.url_decode(str)` | URL decode a string |
 
-**Path Utilities:**
+**Path Utilities (rs.path):**
 
 | Function | Description |
 |----------|-------------|
-| `join_path(...)` | Join path segments |
-| `basename(path)` | Get file name from path |
-| `dirname(path)` | Get directory from path |
-| `extension(path)` | Get file extension |
+| `rs.path.join(...)` | Join path segments |
+| `rs.path.basename(path)` | Get file name from path |
+| `rs.path.dirname(path)` | Get directory from path |
+| `rs.path.extension(path)` | Get file extension |
 
-**Collections:**
-
-| Function | Description |
-|----------|-------------|
-| `filter(items, fn)` | Filter items where fn returns true |
-| `sort(items, fn)` | Sort items using comparator |
-| `map(items, fn)` | Transform each item |
-| `find(items, fn)` | Find first item where fn returns true |
-| `group_by(items, key_fn)` | Group items by key |
-| `unique(items)` | Remove duplicates |
-| `reverse(items)` | Reverse array order |
-| `take(items, n)` | Take first n items |
-| `skip(items, n)` | Skip first n items |
-| `keys(table)` | Get all keys from a table |
-| `values(table)` | Get all values from a table |
-
-**Environment:**
+**Hash Functions (rs.hash):**
 
 | Function | Description |
 |----------|-------------|
-| `env(name)` | Get environment variable |
-| `print(...)` | Log output to build log |
-| `git_info(path?)` | Get git info for repo or file (hash, branch, author, date, dirty) |
+| `rs.hash.content(content)` | Hash content (xxHash64) |
+| `rs.hash.file(path)` | Hash file contents |
+
+**Collection Operations (rs.ops):**
+
+| Function | Description |
+|----------|-------------|
+| `rs.ops.filter(items, fn)` | Filter items where fn returns true |
+| `rs.ops.sort(items, fn)` | Sort items using comparator |
+| `rs.ops.map(items, fn)` | Transform each item |
+| `rs.ops.find(items, fn)` | Find first item where fn returns true |
+| `rs.ops.group_by(items, key_fn)` | Group items by key |
+| `rs.ops.unique(items)` | Remove duplicates |
+| `rs.ops.reverse(items)` | Reverse array order |
+| `rs.ops.take(items, n)` | Take first n items |
+| `rs.ops.skip(items, n)` | Skip first n items |
+| `rs.ops.keys(table)` | Get all keys from a table |
+| `rs.ops.values(table)` | Get all values from a table |
+| `rs.ops.reduce(items, init, fn)` | Reduce items to single value |
+
+Parallel collection operations:
+| Function | Description |
+|----------|-------------|
+| `rs.ops.par.map(items, fn, ctx?)` | Transform items in parallel (pass context explicitly) |
+| `rs.ops.par.filter(items, fn, ctx?)` | Filter items in parallel (pass context explicitly) |
+
+**Environment (rs.env):**
+
+| Function | Description |
+|----------|-------------|
+| `rs.env.get(name)` | Get environment variable |
+
+**Logging (rs.log):**
+
+| Function | Description |
+|----------|-------------|
+| `rs.log.trace(...)` | Log at trace level |
+| `rs.log.debug(...)` | Log at debug level |
+| `rs.log.info(...)` | Log at info level |
+| `rs.log.warn(...)` | Log at warn level |
+| `rs.log.error(...)` | Log at error level |
+| `rs.log.print(...)` | Print to output |
+
+**Git Information (rs.git):**
+
+| Function | Description |
+|----------|-------------|
+| `rs.git.info(path?)` | Get git info for repo or file (hash, branch, author, date, dirty) |
+| `rs.git.is_ignored(path)` | Check if path is gitignored |
 
 **Note:** All file operations respect the sandbox setting and are tracked for incremental builds. Paths can be relative (resolved from project root) or absolute.
 
@@ -337,7 +407,7 @@ local rs = require("rs-web")
 
 -- Create and run tasks
 local task1 = rs.coro.task(function()
-  local data = rs.load_json("file1.json")
+  local data = rs.data.load_json("file1.json")
   rs.coro.yield()  -- cooperative yield
   return data
 end)
@@ -354,53 +424,71 @@ local winner, index = rs.coro.race({task1, task2})
 
 #### Parallel Processing
 
-True parallel execution using Rust's rayon thread pool:
+True parallel execution using Rust's rayon thread pool. Each module has a `.par` submodule:
 
 ```lua
 local rs = require("rs-web")
 
 -- Load multiple JSON files in parallel (I/O parallelism)
-local configs = rs.parallel.load_json({
+local configs = rs.data.par.load_json({
   "content/problems/two-sum/config.json",
   "content/problems/reverse-string/config.json",
 })
 
 -- Load multiple YAML files in parallel
-local data = rs.parallel.load_yaml({"a.yaml", "b.yaml", "c.yaml"})
+local data = rs.data.par.load_yaml({"a.yaml", "b.yaml", "c.yaml"})
 
 -- Read multiple files in parallel
-local contents = rs.parallel.read_files({"a.txt", "b.txt", "c.txt"})
+local contents = rs.fs.par.read({"a.txt", "b.txt", "c.txt"})
 
 -- Parse frontmatter from multiple files in parallel
-local posts = rs.parallel.read_frontmatter({
+local posts = rs.data.par.load_frontmatter({
   "content/blog/post1.md",
   "content/blog/post2.md",
 })
 -- Returns: { { frontmatter = {...}, content = "...", raw = "..." }, ... }
 
 -- Check multiple files exist in parallel
-local exists = rs.parallel.file_exists({"a.txt", "b.txt"})
+local exists = rs.fs.par.exists({"a.txt", "b.txt"})
 
 -- Create directories in parallel
-rs.parallel.create_dirs({"dist/a", "dist/b", "dist/c"})
+rs.fs.par.create_dirs({"dist/a", "dist/b", "dist/c"})
 
 -- Copy files in parallel (sources, destinations)
-rs.parallel.copy_files(
+rs.fs.par.copy(
   {"src/a.txt", "src/b.txt"},
   {"dist/a.txt", "dist/b.txt"}
 )
 
 -- Convert images in parallel
-rs.parallel.image_convert(
+rs.image.par.convert(
   {"img/a.jpg", "img/b.jpg"},
   {"dist/a.webp", "dist/b.webp"},
   { quality = 85 }
 )
 
--- Functional helpers (sequential but convenient)
-local doubled = rs.parallel.map(items, function(x) return x * 2 end)
-local evens = rs.parallel.filter(items, function(x) return x % 2 == 0 end)
-local sum = rs.parallel.reduce(items, 0, function(acc, x) return acc + x end)
+-- TRUE PARALLEL map/filter (runs on rayon thread pool)
+-- IMPORTANT: Upvalues are NOT captured. Pass context explicitly as 3rd argument.
+local multiplier = 10
+local doubled = rs.ops.par.map(items, function(x, ctx)
+  return x * ctx.multiplier
+end, { multiplier = multiplier })
+
+local threshold = 5
+local above = rs.ops.par.filter(items, function(x, ctx)
+  return x > ctx.threshold
+end, { threshold = threshold })
+
+-- Simple functions without upvalues work directly
+local squared = rs.ops.par.map(items, function(x) return x * x end)
+local evens = rs.ops.par.filter(items, function(x) return x % 2 == 0 end)
+
+-- Sequential operations (for non-serializable items)
+local result = rs.ops.map(items, function(x) return x.name end)
+local filtered = rs.ops.filter(items, function(x) return x.active end)
+
+-- Reduce (sequential)
+local sum = rs.ops.reduce(items, 0, function(acc, x) return acc + x end)
 ```
 
 #### Async I/O (Tokio)
@@ -411,7 +499,7 @@ True async I/O backed by Tokio. All functions return handles - await with `rs.as
 -- Spawn concurrent fetches
 local t1 = rs.async.fetch("https://api.example.com/a", { cache = true })
 local t2 = rs.async.fetch_bytes("https://fonts.example.com/font.woff2", { cache = true })
-local t3 = rs.download_google_font("Lexend", { fonts_dir = "dist/fonts", css_path = "dist/fonts.css" })
+local t3 = rs.fonts.download_google_font("Lexend", { fonts_dir = "dist/fonts", css_path = "dist/fonts.css" })
 
 -- Await all together
 local results = rs.async.await_all({t1, t2, t3})

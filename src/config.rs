@@ -601,17 +601,17 @@ mod tests {
         )
         .expect("failed to register Lua functions");
 
-        // Test file_exists
+        // Test fs.exists
         let result: bool = lua
-            .load("return rs.file_exists('Cargo.toml')")
-            .eval()
-            .expect("failed to eval file_exists for Cargo.toml");
+            .load("local rs = require('rs-web'); return rs.fs.exists('Cargo.toml')")
+            .call(())
+            .expect("failed to call fs.exists for Cargo.toml");
         assert!(result);
 
         let result: bool = lua
-            .load("return rs.file_exists('nonexistent.file')")
-            .eval()
-            .expect("failed to eval file_exists for nonexistent.file");
+            .load("local rs = require('rs-web'); return rs.fs.exists('nonexistent.file')")
+            .call(())
+            .expect("failed to call fs.exists for nonexistent.file");
         assert!(!result);
     }
 
@@ -631,8 +631,8 @@ mod tests {
 
         // Trying to access /etc/passwd should fail with sandbox enabled
         let result = lua
-            .load("return rs.read_file('/etc/passwd')")
-            .eval::<Value>();
+            .load("local rs = require('rs-web'); return rs.fs.read('/etc/passwd')")
+            .call::<Value>(());
         assert!(
             result.is_err(),
             "sandbox should block access to /etc/passwd"
@@ -640,8 +640,8 @@ mod tests {
 
         // Trying to access parent directory should fail
         let result = lua
-            .load("return rs.read_file('../some_file')")
-            .eval::<Value>();
+            .load("local rs = require('rs-web'); return rs.fs.read('../some_file')")
+            .call::<Value>(());
         assert!(
             result.is_err(),
             "sandbox should block access to parent directory"
@@ -664,15 +664,15 @@ mod tests {
 
         // Accessing files within project should work
         let result: bool = lua
-            .load("return rs.file_exists('Cargo.toml')")
-            .eval()
-            .expect("sandbox should allow file_exists within project");
+            .load("local rs = require('rs-web'); return rs.fs.exists('Cargo.toml')")
+            .call(())
+            .expect("sandbox should allow fs.exists within project");
         assert!(result);
 
         // Reading files within project should work
         let result = lua
-            .load("return rs.read_file('Cargo.toml')")
-            .eval::<Value>();
+            .load("local rs = require('rs-web'); return rs.fs.read('Cargo.toml')")
+            .call::<Value>(());
         assert!(
             result.is_ok(),
             "sandbox should allow reading files within project"

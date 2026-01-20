@@ -8,23 +8,28 @@
 
 mod assets;
 mod async_io;
-mod collections;
-mod content;
 mod coro;
 mod crypt;
 mod css;
+mod data;
+mod date;
 mod env;
-mod file_ops;
 mod fonts;
+mod fs;
 mod git;
+mod hash;
 mod helpers;
 mod highlight;
-mod images;
+mod html;
+mod image;
 mod js;
+mod log;
 mod markdown;
+mod ops;
 mod parallel;
+mod path;
+mod portable;
 mod pwa;
-mod search;
 mod seo;
 mod text;
 mod types;
@@ -83,17 +88,42 @@ pub fn register(
     rs_module.set("_SANDBOX", sandbox)?;
     rs_module.set("_PROJECT_ROOT", project_root.to_string_lossy().to_string())?;
 
-    // Register all function categories on the module
-    file_ops::register(lua, &rs_module, &root, sandbox, tracker.clone())?;
-    search::register(lua, &rs_module, &root, sandbox)?;
-    collections::register(lua, &rs_module)?;
-    text::register(lua, &rs_module)?;
-    env::register(lua, &rs_module, &root)?;
-    git::register(lua, &rs_module, &root, sandbox)?;
-    content::register(lua, &rs_module, tracker.clone())?;
-    images::register(lua, &rs_module, &root, tracker.clone())?;
+    let ops_module = ops::create_module(lua)?;
+    rs_module.set("ops", ops_module)?;
 
-    // Register js, css, fonts as submodules
+    let fs_module = fs::create_module(lua, &root, sandbox, tracker.clone())?;
+    rs_module.set("fs", fs_module)?;
+
+    let data_module = data::create_module(lua, &root, sandbox, tracker.clone())?;
+    rs_module.set("data", data_module)?;
+
+    let image_module = image::create_module(lua, &root, tracker.clone())?;
+    rs_module.set("image", image_module)?;
+
+    let text_module = text::create_module(lua)?;
+    rs_module.set("text", text_module)?;
+
+    let date_module = date::create_module(lua)?;
+    rs_module.set("date", date_module)?;
+
+    let path_module = path::create_module(lua)?;
+    rs_module.set("path", path_module)?;
+
+    let hash_module = hash::create_module(lua)?;
+    rs_module.set("hash", hash_module)?;
+
+    let git_module = git::create_module(lua, &root, sandbox)?;
+    rs_module.set("git", git_module)?;
+
+    let html_module = html::create_module(lua, tracker.clone())?;
+    rs_module.set("html", html_module)?;
+
+    let log_module = log::create_module(lua)?;
+    rs_module.set("log", log_module)?;
+
+    let env_module = env::create_module(lua)?;
+    rs_module.set("env", env_module)?;
+
     let js_module = js::create_module(lua, &root, tracker.clone())?;
     rs_module.set("js", js_module)?;
 
@@ -138,10 +168,8 @@ pub fn register(
         .get::<Table>("package")?
         .get::<Table>("preload")?;
 
-    let rs_module_clone = rs_module.clone();
-    let loader = lua.create_function(move |_, _: ()| Ok(rs_module_clone.clone()))?;
+    let loader = lua.create_function(move |_, _: ()| Ok(rs_module.clone()))?;
     preload.set("rs-web", loader)?;
-    lua.globals().set("rs", rs_module)?;
 
     Ok(())
 }

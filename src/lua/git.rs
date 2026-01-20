@@ -1,16 +1,16 @@
-//! Git functions - git_info
+//! Git module (rs.git)
 
 use super::helpers::{is_path_within_root, resolve_path};
 use mlua::{Lua, Result, Table, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// Register git-related Lua functions on the module table
-pub fn register(lua: &Lua, module: &Table, project_root: &Path, sandbox: bool) -> Result<()> {
+pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Table> {
+    let git = lua.create_table()?;
     let root = project_root.to_path_buf();
 
-    // git_info(path?) - Get git info for repo, file, or directory
+    // info(path?) - Get git info for repo, file, or directory
     let root_clone = root.clone();
-    let git_info_fn = lua.create_function(move |lua, path: Option<String>| {
+    let info_fn = lua.create_function(move |lua, path: Option<String>| {
         use git2::Repository;
 
         let repo = match Repository::discover(&root_clone) {
@@ -20,7 +20,6 @@ pub fn register(lua: &Lua, module: &Table, project_root: &Path, sandbox: bool) -
 
         let result = lua.create_table()?;
 
-        // If path is provided, get info for specific file/directory
         if let Some(ref p) = path {
             let resolved = resolve_path(p, &root_clone);
             if sandbox && !is_path_within_root(&resolved, &root_clone) {
@@ -30,11 +29,9 @@ pub fn register(lua: &Lua, module: &Table, project_root: &Path, sandbox: bool) -
                 )));
             }
 
-            // Get the relative path from repo root
             let repo_root = repo.workdir().unwrap_or(root_clone.as_path());
             let rel_path = resolved.strip_prefix(repo_root).unwrap_or(&resolved);
 
-            // Find last commit that touched this path
             let mut revwalk = match repo.revwalk() {
                 Ok(r) => r,
                 Err(_) => return Ok(Value::Nil),
@@ -44,7 +41,6 @@ pub fn register(lua: &Lua, module: &Table, project_root: &Path, sandbox: bool) -
 
             for oid in revwalk.flatten() {
                 if let Ok(commit) = repo.find_commit(oid) {
-                    // Check if this commit touched the path
                     let dominated = if let Ok(parent) = commit.parent(0) {
                         let tree = commit.tree().ok();
                         let parent_tree = parent.tree().ok();
@@ -69,7 +65,6 @@ pub fn register(lua: &Lua, module: &Table, project_root: &Path, sandbox: bool) -
                             false
                         }
                     } else {
-                        // First commit - check if path exists in tree
                         commit
                             .tree()
                             .ok()
@@ -97,7 +92,6 @@ pub fn register(lua: &Lua, module: &Table, project_root: &Path, sandbox: bool) -
             return Ok(Value::Nil);
         }
 
-        // No path - return repo-level info
         if let Ok(head) = repo.head() {
             if let Some(oid) = head.target() {
                 let hash = oid.to_string();
@@ -111,20 +105,43 @@ pub fn register(lua: &Lua, module: &Table, project_root: &Path, sandbox: bool) -
                 }
             }
 
-            // Branch name
             if let Some(name) = head.shorthand() {
                 result.set("branch", name.to_string())?;
             }
         }
 
-        // Check if repo is dirty
         let statuses = repo.statuses(None).ok();
         let dirty = statuses.map(|s| !s.is_empty()).unwrap_or(false);
         result.set("dirty", dirty)?;
 
         Ok(Value::Table(result))
     })?;
-    module.set("git_info", git_info_fn)?;
+    git.set("info", info_fn)?;
 
-    Ok(())
+    // is_ignored(path) - Check if path is ignored by .gitignore
+    let root_clone = root.clone();
+    let is_ignored_fn = lua.create_function(move |_, path: String| {
+        let full_path = if Path::new(&path).is_absolute() {
+            PathBuf::from(&path)
+        } else {
+            root_clone.join(&path)
+        };
+
+        let mut builder = ignore::gitignore::GitignoreBuilder::new(&root_clone);
+        let gitignore_path = root_clone.join(".gitignore");
+        if gitignore_path.exists() {
+            let _ = builder.add(&gitignore_path);
+        }
+
+        match builder.build() {
+            Ok(gitignore) => {
+                let is_dir = full_path.is_dir();
+                Ok(gitignore.matched(&full_path, is_dir).is_ignore())
+            }
+            Err(_) => Ok(false),
+        }
+    })?;
+    git.set("is_ignored", is_ignored_fn)?;
+
+    Ok(git)
 }
