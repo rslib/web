@@ -159,9 +159,45 @@ Available in `config.lua`:
 
 | Function | Description |
 |----------|-------------|
-| `render_markdown(content, transform_fn?)` | Convert markdown to HTML with optional transform |
 | `html_to_text(html)` | Convert HTML to plain text |
 | `rss_date(date_string)` | Format date for RSS (RFC 2822) |
+
+**Markdown (rs.markdown):**
+
+| Function | Description |
+|----------|-------------|
+| `rs.markdown.render(content, opts?)` | Render markdown to HTML with optional plugins |
+| `rs.markdown.plugins(...)` | Combine/flatten plugins into array |
+| `rs.markdown.plugins.default(opts?)` | Get default plugins (lazy_images, heading_anchors, external_links) |
+| `rs.markdown.plugins.lazy_images(opts?)` | Plugin: add `loading="lazy" decoding="async"` to images |
+| `rs.markdown.plugins.heading_anchors(opts?)` | Plugin: add `id="slug"` to headings |
+| `rs.markdown.plugins.external_links(opts?)` | Plugin: add `target="_blank" rel="noopener"` to external links |
+
+Example:
+```lua
+-- Simple (uses default plugins)
+local html = rs.markdown.render(content)
+
+-- With custom plugins
+local html = rs.markdown.render(content, {
+  plugins = rs.markdown.plugins(
+    rs.markdown.plugins.default({ lazy_images = false }),
+    my_custom_plugin()
+  ),
+})
+
+-- Custom plugin example
+local function highlight_plugin()
+  return function(ast)
+    local new_ast = {}
+    for _, event in ipairs(ast) do
+      -- Transform events here
+      table.insert(new_ast, event)
+    end
+    return new_ast
+  end
+end
+```
 
 **Image Processing:**
 
@@ -176,10 +212,21 @@ Available in `config.lua`:
 
 | Function | Description |
 |----------|-------------|
-| `build_css(paths_or_pattern, output, options?)` | Build and concatenate CSS files with optional minification (async, returns handle) |
-| `build_js(paths_or_pattern, output, options?)` | Build and concatenate JS files with minification and dead code elimination (async, returns handle) |
 | `check_unused_assets(output_dir)` | Find assets not referenced in HTML output |
-| `download_google_font(family, options)` | Download Google Font files and generate local CSS with optional minification (async, returns handle) |
+
+**Fonts (rs.fonts):**
+
+| Function | Description |
+|----------|-------------|
+| `rs.fonts.download_google_font(family, options)` | Download Google Font files and generate local CSS (async) |
+
+**JS Module (rs.js):**
+
+| Function | Description |
+|----------|-------------|
+| `rs.js.concat(paths, output, options?)` | Concatenate JS files with optional minification (async) |
+| `rs.js.bundle(entry, output, options?)` | Bundle JS with imports via Rolldown (async) |
+| `rs.js.bundle_many(entries, output_dir, options?)` | Bundle multiple JS entries to separate files (async) |
 
 **CSS Module (rs.css):**
 

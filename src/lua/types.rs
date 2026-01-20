@@ -1563,58 +1563,6 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     },
     // ASSETS
     LuaFunction {
-        name: "build_css",
-        module: None,
-        description: "Build and concatenate CSS files from glob pattern or array of paths (async)",
-        params: &[
-            LuaParam {
-                name: "paths_or_pattern",
-                typ: "string|string[]",
-                description: "Glob pattern (e.g., 'styles/*.css') or array of file paths",
-                optional: false,
-            },
-            LuaParam {
-                name: "output_path",
-                typ: "string",
-                description: "Output file path",
-                optional: false,
-            },
-            LuaParam {
-                name: "options",
-                typ: "BuildCssOptions",
-                description: "Build options (minify)",
-                optional: true,
-            },
-        ],
-        returns: "AsyncIOTask",
-    },
-    LuaFunction {
-        name: "build_js",
-        module: None,
-        description: "Build and concatenate JS files with minification and dead code elimination (async)",
-        params: &[
-            LuaParam {
-                name: "paths_or_pattern",
-                typ: "string|string[]",
-                description: "Glob pattern (e.g., 'scripts/*.js') or array of file paths",
-                optional: false,
-            },
-            LuaParam {
-                name: "output_path",
-                typ: "string",
-                description: "Output file path",
-                optional: false,
-            },
-            LuaParam {
-                name: "options",
-                typ: "BuildJsOptions",
-                description: "Build options (minify)",
-                optional: true,
-            },
-        ],
-        returns: "AsyncIOTask",
-    },
-    LuaFunction {
         name: "check_unused_assets",
         module: None,
         description: "Find assets in output directory not referenced by any HTML file",
@@ -1626,9 +1574,10 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         }],
         returns: "string[]",
     },
+    // FONTS MODULE
     LuaFunction {
         name: "download_google_font",
-        module: None,
+        module: Some("fonts"),
         description: "Download Google Font files and generate local CSS (async, returns handle)",
         params: &[
             LuaParam {
@@ -2517,6 +2466,85 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         description: "Clear the asset manifest",
         params: &[],
         returns: "nil",
+    },
+    // JS MODULE
+    LuaFunction {
+        name: "concat",
+        module: Some("js"),
+        description: "Concatenate JS files with optional minification (async)",
+        params: &[
+            LuaParam {
+                name: "paths",
+                typ: "string[]",
+                description: "Array of JS file paths",
+                optional: false,
+            },
+            LuaParam {
+                name: "output",
+                typ: "string",
+                description: "Output file path",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "BuildJsOptions",
+                description: "Build options (minify)",
+                optional: true,
+            },
+        ],
+        returns: "AsyncHandle",
+    },
+    LuaFunction {
+        name: "bundle",
+        module: Some("js"),
+        description: "Bundle JS with imports via Rolldown (async)",
+        params: &[
+            LuaParam {
+                name: "entry",
+                typ: "string",
+                description: "Entry file path",
+                optional: false,
+            },
+            LuaParam {
+                name: "output",
+                typ: "string",
+                description: "Output file path",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "BuildJsOptions",
+                description: "Build options (minify)",
+                optional: true,
+            },
+        ],
+        returns: "AsyncHandle",
+    },
+    LuaFunction {
+        name: "bundle_many",
+        module: Some("js"),
+        description: "Bundle multiple JS entries to separate output files (async)",
+        params: &[
+            LuaParam {
+                name: "entries",
+                typ: "string[]",
+                description: "Array of JS entry file paths",
+                optional: false,
+            },
+            LuaParam {
+                name: "output_dir",
+                typ: "string",
+                description: "Output directory path",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "BuildJsOptions",
+                description: "Build options (minify)",
+                optional: true,
+            },
+        ],
+        returns: "AsyncHandle",
     },
     // CSS MODULE
     LuaFunction {

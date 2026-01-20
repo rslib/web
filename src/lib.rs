@@ -119,10 +119,13 @@
 //! - `image_convert(input, output, options?)` - Convert image format
 //! - `image_optimize(input, output, options?)` - Optimize/compress image
 //!
-//! **Asset Building:**
-//! - `build_css(pattern, output, options?)` - Build and concatenate CSS files (async)
-//! - `build_js(pattern, output, options?)` - Build and concatenate JS files with minification and DCE (async)
+//! **Fonts (rs.fonts):**
 //! - `download_google_font(family, options)` - Download Google Font with optional CSS minification (async)
+//!
+//! **JS Module (rs.js):**
+//! - `concat(paths, output, options?)` - Concatenate JS files with optional minification (async)
+//! - `bundle(entry, output, options?)` - Bundle JS with imports via Rolldown (async)
+//! - `bundle_many(entries, output_dir, options?)` - Bundle multiple JS entries to separate files (async)
 //!
 //! **CSS Module (rs.css):**
 //! - `concat(paths, output, options?)` - Concatenate CSS files with optional minification (async)
