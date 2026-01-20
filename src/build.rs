@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::config::{Config, PageDef};
-use crate::markdown::{Pipeline, TransformContext};
 use crate::templates::Templates;
 use crate::tracker::{
     AssetRef, BuildTracker, CachedDeps, SharedTracker, extract_html_asset_refs,
@@ -126,8 +125,7 @@ impl Builder {
 
         // Stage 6: Render all pages in parallel
         trace!("Stage 6: Rendering {} pages", pages.len());
-        let pipeline = Pipeline::from_config(&self.config);
-        self.render_pages(&pages, &global_data, &templates, &pipeline)?;
+        self.render_pages(&pages, &global_data, &templates)?;
 
         info!("Build complete: {} pages generated", pages.len());
         rs_print!("Generated {} pages", pages.len());
@@ -328,12 +326,11 @@ impl Builder {
         pages: &[PageDef],
         global_data: &serde_json::Value,
         templates: &Templates,
-        pipeline: &Pipeline,
     ) -> Result<()> {
         // Render all pages in parallel
         pages
             .par_iter()
-            .try_for_each(|page| self.render_single_page(page, global_data, templates, pipeline))?;
+            .try_for_each(|page| self.render_single_page(page, global_data, templates))?;
 
         Ok(())
     }
@@ -343,18 +340,12 @@ impl Builder {
         page: &PageDef,
         global_data: &serde_json::Value,
         templates: &Templates,
-        pipeline: &Pipeline,
     ) -> Result<()> {
         trace!("Rendering page: {}", page.path);
 
-        // Process content through markdown pipeline if provided
+        // Process content through markdown using Lua rs.markdown.render if provided
         let html_content = if let Some(ref markdown) = page.content {
-            let ctx = TransformContext {
-                config: &self.config,
-                current_path: &self.project_dir,
-                base_url: &self.config.site.base_url,
-            };
-            Some(pipeline.process(markdown, &ctx))
+            Some(self.config.render_markdown(markdown)?)
         } else {
             page.html.clone()
         };
@@ -593,8 +584,7 @@ impl Builder {
             Some(self.tracker.clone()),
             Some(self.config.asset_manifest.clone()),
         )?;
-        let pipeline = Pipeline::from_config(&self.config);
-        self.render_pages(&pages, &global_data, &templates, &pipeline)?;
+        self.render_pages(&pages, &global_data, &templates)?;
 
         // Merge thread-local tracking data and save
         self.tracker.merge_all_threads();
@@ -670,10 +660,8 @@ impl Builder {
             all_pages.len()
         );
 
-        let pipeline = Pipeline::from_config(&self.config);
-
         // Re-render only affected pages with cached data
-        self.render_pages(&pages_to_rebuild, &global_data, &templates, &pipeline)?;
+        self.render_pages(&pages_to_rebuild, &global_data, &templates)?;
 
         // Merge thread-local tracking data and save (cleanup stale files)
         self.tracker.merge_all_threads();
@@ -729,8 +717,7 @@ impl Builder {
                 Some(self.tracker.clone()),
                 Some(self.config.asset_manifest.clone()),
             )?;
-            let pipeline = Pipeline::from_config(&self.config);
-            self.render_pages(pages, global_data, &templates, &pipeline)?;
+            self.render_pages(pages, global_data, &templates)?;
             rs_print!(
                 "Rebuilt {} assets, re-rendered {} pages",
                 changed_paths.len(),

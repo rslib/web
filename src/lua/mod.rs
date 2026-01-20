@@ -3,7 +3,7 @@
 //! ```lua
 //! local rs = require("rs-web")
 //! local content = rs.read_file("path/to/file.md")
-//! local html = rs.render_markdown(content)
+//! local html = rs.markdown.render(content)
 //! ```
 
 mod assets;
@@ -21,7 +21,7 @@ mod helpers;
 mod highlight;
 mod images;
 mod js;
-mod markdown_context;
+mod markdown;
 mod parallel;
 mod pwa;
 mod search;
@@ -52,7 +52,8 @@ use std::path::Path;
 /// - Text: rs.slugify, rs.word_count, rs.reading_time
 /// - Environment: rs.env, rs.print, rs.is_gitignored
 /// - Git: rs.git_info
-/// - Content: rs.render_markdown, rs.rss_date, rs.html_to_text, etc.
+/// - Content: rs.rss_date, rs.html_to_text, etc.
+/// - Markdown: rs.markdown.render, rs.markdown.plugins
 /// - Images: rs.image_dimensions, rs.image_resize, rs.image_convert, rs.image_optimize
 /// - JS: rs.js.concat, rs.js.bundle
 /// - CSS: rs.css.concat, rs.css.bundle
@@ -125,8 +126,11 @@ pub fn register(
     let pwa_module = pwa::create_module(lua, &root, tracker.clone())?;
     rs_module.set("pwa", pwa_module)?;
 
-    let seo_module = seo::create_module(lua, &root, tracker)?;
+    let seo_module = seo::create_module(lua, &root, tracker.clone())?;
     rs_module.set("seo", seo_module)?;
+
+    // Register markdown module (rs.markdown.render, rs.markdown.plugins)
+    markdown::register(lua, &rs_module, tracker)?;
 
     // Register as a preloaded module so require("rs-web") works
     let preload: Table = lua

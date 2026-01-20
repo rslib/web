@@ -459,6 +459,31 @@ impl Config {
 
         Ok(json_value)
     }
+
+    /// Render markdown content using rs.markdown.render with default plugins
+    pub fn render_markdown(&self, content: &str) -> Result<String> {
+        // Get rs.markdown.render function
+        let rs: Table = self
+            .lua
+            .globals()
+            .get("rs")
+            .map_err(|e| anyhow::anyhow!("Failed to get rs module: {}", e))?;
+
+        let markdown: Table = rs
+            .get("markdown")
+            .map_err(|e| anyhow::anyhow!("Failed to get rs.markdown module: {}", e))?;
+
+        let render: Function = markdown
+            .get("render")
+            .map_err(|e| anyhow::anyhow!("Failed to get rs.markdown.render function: {}", e))?;
+
+        // Call render with content (uses default plugins)
+        let result: mlua::String = render
+            .call(content)
+            .map_err(|e| anyhow::anyhow!("Failed to call rs.markdown.render: {}", e))?;
+
+        Ok(result.to_str()?.to_string())
+    }
 }
 /// Parse the config table into ConfigData
 fn parse_config(_lua: &Lua, table: &Table) -> mlua::Result<ConfigData> {

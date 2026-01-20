@@ -102,9 +102,16 @@
 //! - `read_frontmatter(path)` - Extract frontmatter and content from markdown
 //!
 //! **Content Processing:**
-//! - `render_markdown(content, transform_fn?)` - Convert markdown to HTML
 //! - `html_to_text(html)` - Convert HTML to plain text
 //! - `rss_date(date_string)` - Format date for RSS (RFC 2822)
+//!
+//! **Markdown (rs.markdown):**
+//! - `render(content, opts?)` - Render markdown to HTML with optional plugins
+//! - `plugins(...)` - Combine/flatten plugins
+//! - `plugins.default(opts?)` - Get default plugins (lazy_images, heading_anchors, external_links)
+//! - `plugins.lazy_images(opts?)` - Plugin: add loading="lazy" decoding="async" to images
+//! - `plugins.heading_anchors(opts?)` - Plugin: add id="slug" to headings
+//! - `plugins.external_links(opts?)` - Plugin: add target="_blank" rel="noopener" to external links
 //!
 //! **Image Processing:**
 //! - `image_dimensions(path)` - Get image width and height
@@ -262,7 +269,7 @@
 //! ## Modules
 //!
 //! - [`config`] - Configuration loading and structures
-//! - [`markdown`] - Markdown processing pipeline
+//! - [`lua`] - Lua API including `rs.markdown` for markdown processing
 //! - [`templates`] - Tera template rendering
 //! - [`encryption`] - AES-256-GCM encryption utilities (used by `rs.crypt` Lua module)
 //! - [`build`] - Main build orchestrator
@@ -282,7 +289,6 @@ pub mod data;
 pub mod encryption;
 pub mod git;
 pub mod lua;
-pub mod markdown;
 pub mod server;
 pub mod templates;
 pub mod text;

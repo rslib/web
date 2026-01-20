@@ -369,68 +369,32 @@ pub static LUA_CLASSES: &[LuaClass] = &[
         ],
     },
     LuaClass {
-        name: "MarkdownContext",
-        description: "Context information during markdown parsing",
+        name: "MarkdownRenderOptions",
+        description: "Options for rs.markdown.render",
+        fields: &[LuaField {
+            name: "plugins",
+            typ: "MarkdownPlugin[]|nil",
+            description: "Array of plugin functions to apply (default: all built-in plugins)",
+        }],
+    },
+    LuaClass {
+        name: "MarkdownDefaultOptions",
+        description: "Options for rs.markdown.plugins.default",
         fields: &[
             LuaField {
-                name: "in_paragraph",
-                typ: "boolean",
-                description: "Inside paragraph",
+                name: "lazy_images",
+                typ: "boolean|nil",
+                description: "Enable lazy_images plugin (default: true)",
             },
             LuaField {
-                name: "in_heading",
-                typ: "boolean",
-                description: "Inside heading",
+                name: "heading_anchors",
+                typ: "boolean|nil",
+                description: "Enable heading_anchors plugin (default: true)",
             },
             LuaField {
-                name: "in_list",
-                typ: "boolean",
-                description: "Inside list",
-            },
-            LuaField {
-                name: "in_list_item",
-                typ: "boolean",
-                description: "Inside list item",
-            },
-            LuaField {
-                name: "in_blockquote",
-                typ: "boolean",
-                description: "Inside blockquote",
-            },
-            LuaField {
-                name: "in_link",
-                typ: "boolean",
-                description: "Inside link",
-            },
-            LuaField {
-                name: "in_emphasis",
-                typ: "boolean",
-                description: "Inside emphasis",
-            },
-            LuaField {
-                name: "in_strong",
-                typ: "boolean",
-                description: "Inside strong",
-            },
-            LuaField {
-                name: "in_code_block",
-                typ: "boolean",
-                description: "Inside code block",
-            },
-            LuaField {
-                name: "in_table",
-                typ: "boolean",
-                description: "Inside table",
-            },
-            LuaField {
-                name: "heading_level",
-                typ: "number",
-                description: "Current heading level (0 if not in heading)",
-            },
-            LuaField {
-                name: "list_depth",
-                typ: "number",
-                description: "Nesting depth of lists",
+                name: "external_links",
+                typ: "boolean|nil",
+                description: "Enable external_links plugin (default: true)",
             },
         ],
     },
@@ -1525,26 +1489,6 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         returns: "GitInfo|nil",
     },
     // CONTENT
-    LuaFunction {
-        name: "render_markdown",
-        module: None,
-        description: "Render markdown to HTML with optional AST transformation",
-        params: &[
-            LuaParam {
-                name: "content",
-                typ: "string",
-                description: "Markdown content",
-                optional: false,
-            },
-            LuaParam {
-                name: "transform_fn",
-                typ: "fun(event: MarkdownEvent, ctx: MarkdownContext): MarkdownEvent|nil",
-                description: "Optional transform function",
-                optional: true,
-            },
-        ],
-        returns: "string",
-    },
     LuaFunction {
         name: "rss_date",
         module: None,
@@ -2775,6 +2719,87 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         }],
         returns: "AsyncIOTask",
     },
+    // MARKDOWN MODULE
+    LuaFunction {
+        name: "render",
+        module: Some("markdown"),
+        description: "Render markdown to HTML with optional plugins",
+        params: &[
+            LuaParam {
+                name: "content",
+                typ: "string",
+                description: "Markdown content",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "MarkdownRenderOptions",
+                description: "Render options with plugins",
+                optional: true,
+            },
+        ],
+        returns: "string",
+    },
+    LuaFunction {
+        name: "plugins",
+        module: Some("markdown"),
+        description: "Combine/flatten multiple plugins into a single array",
+        params: &[LuaParam {
+            name: "...",
+            typ: "MarkdownPlugin|MarkdownPlugin[]",
+            description: "Plugins or arrays of plugins to combine",
+            optional: false,
+        }],
+        returns: "MarkdownPlugin[]",
+    },
+    LuaFunction {
+        name: "plugins.default",
+        module: Some("markdown"),
+        description: "Get default plugins (lazy_images, heading_anchors, external_links)",
+        params: &[LuaParam {
+            name: "options",
+            typ: "MarkdownDefaultOptions",
+            description: "Options to disable specific default plugins",
+            optional: true,
+        }],
+        returns: "MarkdownPlugin[]",
+    },
+    LuaFunction {
+        name: "plugins.lazy_images",
+        module: Some("markdown"),
+        description: "Plugin: add loading=\"lazy\" decoding=\"async\" to images",
+        params: &[LuaParam {
+            name: "options",
+            typ: "table",
+            description: "Plugin options (currently unused)",
+            optional: true,
+        }],
+        returns: "MarkdownPlugin",
+    },
+    LuaFunction {
+        name: "plugins.heading_anchors",
+        module: Some("markdown"),
+        description: "Plugin: add id=\"slug\" to headings",
+        params: &[LuaParam {
+            name: "options",
+            typ: "table",
+            description: "Plugin options (currently unused)",
+            optional: true,
+        }],
+        returns: "MarkdownPlugin",
+    },
+    LuaFunction {
+        name: "plugins.external_links",
+        module: Some("markdown"),
+        description: "Plugin: add target=\"_blank\" rel=\"noopener noreferrer\" to external links",
+        params: &[LuaParam {
+            name: "options",
+            typ: "table",
+            description: "Plugin options (currently unused)",
+            optional: true,
+        }],
+        returns: "MarkdownPlugin",
+    },
 ];
 
 // ============================================================================
@@ -2791,7 +2816,7 @@ pub fn generate_emmylua() -> String {
     output.push_str("-- Usage:\n");
     output.push_str("--   local rs = require(\"rs-web\")\n");
     output.push_str("--   local content = rs.read_file(\"path/to/file.md\")\n");
-    output.push_str("--   local html = rs.render_markdown(content)\n\n");
+    output.push_str("--   local html = rs.markdown.render(content)\n\n");
 
     // Generate class definitions
     output.push_str(
@@ -3156,7 +3181,7 @@ pub fn generate_markdown() -> String {
     output.push_str("```lua\n");
     output.push_str("local rs = require(\"rs-web\")\n");
     output.push_str("local content = rs.read_file(\"path/to/file.md\")\n");
-    output.push_str("local html = rs.render_markdown(content)\n");
+    output.push_str("local html = rs.markdown.render(content)\n");
     output.push_str("```\n\n");
     output.push_str("## Table of Contents\n\n");
     output.push_str("- [Types](#types)\n");
@@ -3243,13 +3268,23 @@ pub fn generate_markdown() -> String {
         (
             "Content Processing",
             vec![
-                "render_markdown",
                 "rss_date",
                 "extract_links_markdown",
                 "extract_links_html",
                 "extract_images_markdown",
                 "extract_images_html",
                 "html_to_text",
+            ],
+        ),
+        (
+            "Markdown (rs.markdown)",
+            vec![
+                "markdown.render",
+                "markdown.plugins",
+                "markdown.plugins.default",
+                "markdown.plugins.lazy_images",
+                "markdown.plugins.heading_anchors",
+                "markdown.plugins.external_links",
             ],
         ),
         (
