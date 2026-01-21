@@ -294,32 +294,6 @@ impl LuaPortable {
             }
         }
     }
-
-    /// Check if this portable value contains any functions
-    #[allow(dead_code)]
-    pub fn contains_function(&self) -> bool {
-        match self {
-            LuaPortable::Function(_) => true,
-            LuaPortable::Table(entries) => entries
-                .iter()
-                .any(|(k, v)| k.contains_function() || v.contains_function()),
-            _ => false,
-        }
-    }
-
-    /// Get a human-readable type name
-    #[allow(dead_code)]
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            LuaPortable::Nil => "nil",
-            LuaPortable::Bool(_) => "boolean",
-            LuaPortable::Int(_) => "integer",
-            LuaPortable::Float(_) => "number",
-            LuaPortable::String(_) => "string",
-            LuaPortable::Table(_) => "table",
-            LuaPortable::Function(_) => "function",
-        }
-    }
 }
 
 /// Get a short string representation of a Lua value for error messages
