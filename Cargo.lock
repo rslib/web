@@ -4334,13 +4334,11 @@ dependencies = [
  "syntect",
  "tempfile",
  "tera",
- "thiserror 2.0.17",
  "tokio",
  "toml",
  "tower-http",
  "twox-hash",
  "urlencoding",
- "walkdir",
  "webp",
 ]
 
