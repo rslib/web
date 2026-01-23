@@ -163,13 +163,17 @@
         };
 
         devShells.default = pkgs.mkShell {
-          inherit (pre-commit-local) shellHook;
+          shellHook = ''
+            ${pre-commit-local.shellHook}
+            export RUSTC_WRAPPER="${pkgs.sccache}/bin/sccache"
+          '';
           nativeBuildInputs =
             with pkgs;
             [
               rustToolchain
               pkg-config
               cargo-watch
+              sccache
               # Formatters
               treefmtEval.config.build.wrapper
               nixfmt-rfc-style
