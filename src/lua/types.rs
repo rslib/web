@@ -8,6 +8,8 @@ pub struct LuaFunction {
     pub description: &'static str,
     pub params: &'static [LuaParam],
     pub returns: &'static str,
+    /// For generic return types like AsyncIOTask<T>, specifies what T is
+    pub generic_return: Option<&'static str>,
 }
 
 /// A Lua function parameter
@@ -25,6 +27,8 @@ pub struct LuaClass {
     pub name: &'static str,
     pub description: &'static str,
     pub fields: &'static [LuaField],
+    /// Whether this class is generic (e.g., AsyncIOTask<T>)
+    pub is_generic: bool,
 }
 
 /// A field in a Lua class
@@ -41,8 +45,135 @@ pub struct LuaField {
 
 pub static LUA_CLASSES: &[LuaClass] = &[
     LuaClass {
+        name: "AsyncTask",
+        description: "Async task handle for fetch operations",
+        is_generic: true,
+        fields: &[LuaField {
+            name: "is_completed",
+            typ: "fun(): boolean",
+            description: "Check if task is completed",
+        }],
+    },
+    LuaClass {
+        name: "AsyncIOTask",
+        description: "Async task handle for I/O operations",
+        is_generic: true,
+        fields: &[LuaField {
+            name: "is_completed",
+            typ: "fun(): boolean",
+            description: "Check if task is completed",
+        }],
+    },
+    LuaClass {
+        name: "AsyncLuaTask",
+        description: "Async task handle for wrapped Lua functions",
+        is_generic: true,
+        fields: &[LuaField {
+            name: "is_completed",
+            typ: "fun(): boolean",
+            description: "Check if task is completed",
+        }],
+    },
+    LuaClass {
+        name: "FetchResponse",
+        description: "HTTP response from fetch operations",
+        is_generic: false,
+        fields: &[
+            LuaField {
+                name: "status",
+                typ: "number",
+                description: "HTTP status code",
+            },
+            LuaField {
+                name: "ok",
+                typ: "boolean",
+                description: "True if status is 2xx",
+            },
+            LuaField {
+                name: "body",
+                typ: "string",
+                description: "Response body",
+            },
+            LuaField {
+                name: "headers",
+                typ: "table<string, string>",
+                description: "Response headers",
+            },
+            LuaField {
+                name: "json",
+                typ: "fun(): any",
+                description: "Parse body as JSON",
+            },
+        ],
+    },
+    LuaClass {
+        name: "FileMetadata",
+        description: "File metadata from async.metadata",
+        is_generic: false,
+        fields: &[
+            LuaField {
+                name: "is_file",
+                typ: "boolean",
+                description: "True if path is a file",
+            },
+            LuaField {
+                name: "is_dir",
+                typ: "boolean",
+                description: "True if path is a directory",
+            },
+            LuaField {
+                name: "len",
+                typ: "number",
+                description: "File size in bytes",
+            },
+            LuaField {
+                name: "readonly",
+                typ: "boolean",
+                description: "True if file is read-only",
+            },
+            LuaField {
+                name: "modified",
+                typ: "number?",
+                description: "Unix timestamp of last modification",
+            },
+        ],
+    },
+    LuaClass {
+        name: "DirEntry",
+        description: "Directory entry from async.read_dir",
+        is_generic: false,
+        fields: &[
+            LuaField {
+                name: "path",
+                typ: "string",
+                description: "Full path to entry",
+            },
+            LuaField {
+                name: "name",
+                typ: "string",
+                description: "Entry name",
+            },
+            LuaField {
+                name: "is_file",
+                typ: "boolean",
+                description: "True if entry is a file",
+            },
+            LuaField {
+                name: "is_dir",
+                typ: "boolean",
+                description: "True if entry is a directory",
+            },
+            LuaField {
+                name: "is_symlink",
+                typ: "boolean",
+                description: "True if entry is a symlink",
+            },
+        ],
+    },
+    LuaClass {
         name: "FileInfo",
         description: "File metadata",
+        is_generic: false,
         fields: &[
             LuaField {
                 name: "path",
@@ -79,6 +210,7 @@ pub static LUA_CLASSES: &[LuaClass] = &[
     LuaClass {
         name: "FrontmatterResult",
         description: "Result of reading frontmatter from a file. Frontmatter fields are merged to top level.",
+        is_generic: false,
         fields: &[
             LuaField {
                 name: "raw",
@@ -90,11 +222,17 @@ pub static LUA_CLASSES: &[LuaClass] = &[
                 typ: "string",
                 description: "Content after frontmatter",
             },
+            LuaField {
+                name: "[string]",
+                typ: "any",
+                description: "Additional frontmatter fields",
+            },
         ],
     },
     LuaClass {
         name: "GitInfo",
         description: "Git repository/file information",
+        is_generic: false,
         fields: &[
             LuaField {
                 name: "hash",
@@ -131,6 +269,7 @@ pub static LUA_CLASSES: &[LuaClass] = &[
     LuaClass {
         name: "ImageDimensions",
         description: "Image dimensions",
+        is_generic: false,
         fields: &[
             LuaField {
                 name: "width",
@@ -173,6 +312,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "U[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "filter",
@@ -193,6 +333,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "T[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "sort",
@@ -213,6 +354,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "T[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "find",
@@ -233,6 +375,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "T|nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "group_by",
@@ -253,6 +396,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "table<string, T[]>",
+        generic_return: None,
     },
     LuaFunction {
         name: "unique",
@@ -265,6 +409,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "T[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "reverse",
@@ -277,6 +422,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "T[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "take",
@@ -297,6 +443,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "T[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "skip",
@@ -317,6 +464,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "T[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "keys",
@@ -329,6 +477,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "any[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "values",
@@ -341,6 +490,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "any[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "reduce",
@@ -367,6 +517,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "U",
+        generic_return: None,
     },
     // rs.ops.par - Parallel Collection Operations
     LuaFunction {
@@ -394,6 +545,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "U[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "filter",
@@ -420,6 +572,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "T[]",
+        generic_return: None,
     },
     // ========================================================================
     // rs.fs - File System Operations
@@ -435,6 +588,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string|nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "write",
@@ -455,6 +609,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "boolean",
+        generic_return: None,
     },
     LuaFunction {
         name: "copy",
@@ -475,6 +630,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "boolean",
+        generic_return: None,
     },
     LuaFunction {
         name: "exists",
@@ -487,6 +643,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "boolean",
+        generic_return: None,
     },
     LuaFunction {
         name: "list",
@@ -507,6 +664,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "FileInfo[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "list_dirs",
@@ -519,6 +677,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "glob",
@@ -531,6 +690,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "FileInfo[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "scan",
@@ -543,6 +703,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "FileInfo[]",
+        generic_return: None,
     },
     // rs.fs.par - Parallel File Operations
     LuaFunction {
@@ -556,6 +717,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "(string|nil)[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "exists",
@@ -568,6 +730,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "boolean[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "copy",
@@ -588,6 +751,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "(boolean|string)[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "create_dirs",
@@ -600,6 +764,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "(boolean|string)[]",
+        generic_return: None,
     },
     // ========================================================================
     // rs.data - Data Loading
@@ -615,6 +780,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "table|nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "load_yaml",
@@ -627,6 +793,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "table|nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "load_toml",
@@ -639,6 +806,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "table|nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "load_frontmatter",
@@ -651,6 +819,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "FrontmatterResult|nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "from_json",
@@ -663,6 +832,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "any",
+        generic_return: None,
     },
     LuaFunction {
         name: "to_json",
@@ -683,6 +853,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "string",
+        generic_return: None,
     },
     LuaFunction {
         name: "from_yaml",
@@ -695,6 +866,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "any",
+        generic_return: None,
     },
     LuaFunction {
         name: "to_yaml",
@@ -707,6 +879,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string",
+        generic_return: None,
     },
     LuaFunction {
         name: "from_toml",
@@ -719,6 +892,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "any",
+        generic_return: None,
     },
     LuaFunction {
         name: "to_toml",
@@ -731,6 +905,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string",
+        generic_return: None,
     },
     // rs.data.par - Parallel Data Loading
     LuaFunction {
@@ -744,6 +919,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "(table|nil)[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "load_yaml",
@@ -756,6 +932,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "(table|nil)[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "load_frontmatter",
@@ -768,6 +945,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "(FrontmatterResult|nil)[]",
+        generic_return: None,
     },
     // ========================================================================
     // rs.image - Image Processing
@@ -783,6 +961,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "ImageDimensions|nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "resize",
@@ -809,6 +988,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "boolean",
+        generic_return: None,
     },
     LuaFunction {
         name: "convert",
@@ -835,6 +1015,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "boolean",
+        generic_return: None,
     },
     LuaFunction {
         name: "optimize",
@@ -861,6 +1042,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "boolean",
+        generic_return: None,
     },
     // rs.image.par - Parallel Image Processing
     LuaFunction {
@@ -888,6 +1070,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "(boolean|string)[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "convert",
@@ -914,6 +1097,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "(boolean|string)[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "optimize",
@@ -940,6 +1124,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "(boolean|string)[]",
+        generic_return: None,
     },
     // ========================================================================
     // rs.text - Text Operations
@@ -955,6 +1140,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string",
+        generic_return: None,
     },
     LuaFunction {
         name: "word_count",
@@ -967,6 +1153,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "number",
+        generic_return: None,
     },
     LuaFunction {
         name: "reading_time",
@@ -987,6 +1174,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "number",
+        generic_return: None,
     },
     LuaFunction {
         name: "truncate",
@@ -1013,6 +1201,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "string",
+        generic_return: None,
     },
     LuaFunction {
         name: "url_encode",
@@ -1025,6 +1214,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string",
+        generic_return: None,
     },
     LuaFunction {
         name: "url_decode",
@@ -1037,6 +1227,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string",
+        generic_return: None,
     },
     // ========================================================================
     // rs.date - Date Operations
@@ -1060,6 +1251,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "string|nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "parse",
@@ -1072,6 +1264,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "{ year: number, month: number, day: number }|nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "rss_format",
@@ -1084,6 +1277,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string|nil",
+        generic_return: None,
     },
     // ========================================================================
     // rs.path - Path Operations
@@ -1099,6 +1293,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string",
+        generic_return: None,
     },
     LuaFunction {
         name: "basename",
@@ -1111,6 +1306,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string",
+        generic_return: None,
     },
     LuaFunction {
         name: "dirname",
@@ -1123,6 +1319,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string",
+        generic_return: None,
     },
     LuaFunction {
         name: "extension",
@@ -1135,6 +1332,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string",
+        generic_return: None,
     },
     // ========================================================================
     // rs.hash - Hash Operations
@@ -1150,6 +1348,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string",
+        generic_return: None,
     },
     LuaFunction {
         name: "file",
@@ -1162,6 +1361,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string|nil",
+        generic_return: None,
     },
     // ========================================================================
     // rs.git - Git Operations
@@ -1177,6 +1377,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: true,
         }],
         returns: "GitInfo|nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "is_ignored",
@@ -1189,6 +1390,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "boolean",
+        generic_return: None,
     },
     // ========================================================================
     // rs.html - HTML Operations
@@ -1204,6 +1406,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string",
+        generic_return: None,
     },
     LuaFunction {
         name: "strip_tags",
@@ -1216,6 +1419,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string",
+        generic_return: None,
     },
     LuaFunction {
         name: "extract_links",
@@ -1228,6 +1432,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "extract_images",
@@ -1240,6 +1445,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string[]",
+        generic_return: None,
     },
     // ========================================================================
     // rs.log - Logging
@@ -1255,6 +1461,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "debug",
@@ -1267,6 +1474,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "info",
@@ -1279,6 +1487,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "warn",
@@ -1291,6 +1500,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "error",
@@ -1303,6 +1513,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "print",
@@ -1315,6 +1526,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "nil",
+        generic_return: None,
     },
     // ========================================================================
     // rs.env - Environment
@@ -1330,10 +1542,64 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string|nil",
+        generic_return: None,
     },
     // ========================================================================
     // rs.markdown - Markdown Processing
     // ========================================================================
+    // plugins sub-module (callable table)
+    LuaFunction {
+        name: "default",
+        module: Some("markdown.plugins"),
+        description: "Get default markdown plugins",
+        params: &[LuaParam {
+            name: "opts",
+            typ: "{ lazy_images?: boolean, heading_anchors?: boolean, external_links?: boolean }",
+            description: "Options to disable specific plugins",
+            optional: true,
+        }],
+        returns: "function[]",
+        generic_return: None,
+    },
+    LuaFunction {
+        name: "lazy_images",
+        module: Some("markdown.plugins"),
+        description: "Plugin for lazy-loading images",
+        params: &[LuaParam {
+            name: "opts",
+            typ: "table",
+            description: "Plugin options",
+            optional: true,
+        }],
+        returns: "function",
+        generic_return: None,
+    },
+    LuaFunction {
+        name: "heading_anchors",
+        module: Some("markdown.plugins"),
+        description: "Plugin for adding heading anchor IDs",
+        params: &[LuaParam {
+            name: "opts",
+            typ: "table",
+            description: "Plugin options",
+            optional: true,
+        }],
+        returns: "function",
+        generic_return: None,
+    },
+    LuaFunction {
+        name: "external_links",
+        module: Some("markdown.plugins"),
+        description: "Plugin for external link attributes",
+        params: &[LuaParam {
+            name: "opts",
+            typ: "table",
+            description: "Plugin options",
+            optional: true,
+        }],
+        returns: "function",
+        generic_return: None,
+    },
     LuaFunction {
         name: "render",
         module: Some("markdown"),
@@ -1353,6 +1619,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "string",
+        generic_return: None,
     },
     LuaFunction {
         name: "extract_links",
@@ -1365,6 +1632,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "extract_images",
@@ -1377,6 +1645,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string[]",
+        generic_return: None,
     },
     // ========================================================================
     // rs.assets - Asset Hashing
@@ -1384,7 +1653,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "hash",
         module: Some("assets"),
-        description: "Compute hash of content (async)",
+        description: "Compute hash of content, returns task for await",
         params: &[
             LuaParam {
                 name: "content",
@@ -1399,7 +1668,29 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
                 optional: true,
             },
         ],
-        returns: "AsyncIOTask<string>",
+        returns: "AsyncIOTask",
+        generic_return: Some("string"),
+    },
+    LuaFunction {
+        name: "hash_sync",
+        module: Some("assets"),
+        description: "Compute hash of content synchronously",
+        params: &[
+            LuaParam {
+                name: "content",
+                typ: "string",
+                description: "Content to hash",
+                optional: false,
+            },
+            LuaParam {
+                name: "length",
+                typ: "number",
+                description: "Hash length (default: 8)",
+                optional: true,
+            },
+        ],
+        returns: "string",
+        generic_return: None,
     },
     LuaFunction {
         name: "write_hashed",
@@ -1425,7 +1716,8 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
                 optional: true,
             },
         ],
-        returns: "AsyncIOTask<string>",
+        returns: "AsyncIOTask",
+        generic_return: Some("string"),
     },
     LuaFunction {
         name: "get_path",
@@ -1438,6 +1730,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string",
+        generic_return: None,
     },
     LuaFunction {
         name: "register",
@@ -1458,6 +1751,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "manifest",
@@ -1465,6 +1759,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         description: "Get all asset mappings",
         params: &[],
         returns: "table<string, string>",
+        generic_return: None,
     },
     LuaFunction {
         name: "clear",
@@ -1472,6 +1767,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         description: "Clear the asset manifest",
         params: &[],
         returns: "nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "check_unused",
@@ -1484,6 +1780,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "string[]",
+        generic_return: None,
     },
     // ========================================================================
     // rs.js - JavaScript Processing
@@ -1491,24 +1788,12 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "concat",
         module: Some("js"),
-        description: "Concatenate JavaScript files",
-        params: &[LuaParam {
-            name: "files",
-            typ: "string[]",
-            description: "Input file paths",
-            optional: false,
-        }],
-        returns: "string",
-    },
-    LuaFunction {
-        name: "bundle",
-        module: Some("js"),
-        description: "Bundle and minify JavaScript",
+        description: "Concatenate JavaScript files (async)",
         params: &[
             LuaParam {
                 name: "input",
                 typ: "string|string[]",
-                description: "Input path(s)",
+                description: "Input path(s) or glob pattern",
                 optional: false,
             },
             LuaParam {
@@ -1524,7 +1809,35 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
                 optional: true,
             },
         ],
-        returns: "boolean",
+        returns: "AsyncIOTask",
+        generic_return: Some("nil"),
+    },
+    LuaFunction {
+        name: "bundle",
+        module: Some("js"),
+        description: "Bundle and minify JavaScript (async)",
+        params: &[
+            LuaParam {
+                name: "input",
+                typ: "string|string[]",
+                description: "Input path(s)",
+                optional: false,
+            },
+            LuaParam {
+                name: "output",
+                typ: "string",
+                description: "Output path",
+                optional: false,
+            },
+            LuaParam {
+                name: "opts",
+                typ: "{ minify?: boolean, treeshake?: boolean, format?: string }",
+                description: "Options",
+                optional: true,
+            },
+        ],
+        returns: "AsyncIOTask",
+        generic_return: Some("nil"),
     },
     // ========================================================================
     // rs.css - CSS Processing
@@ -1532,19 +1845,34 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "concat",
         module: Some("css"),
-        description: "Concatenate CSS files",
-        params: &[LuaParam {
-            name: "files",
-            typ: "string[]",
-            description: "Input file paths",
-            optional: false,
-        }],
-        returns: "string",
+        description: "Concatenate CSS files (async)",
+        params: &[
+            LuaParam {
+                name: "input",
+                typ: "string|string[]",
+                description: "Input path(s) or glob pattern",
+                optional: false,
+            },
+            LuaParam {
+                name: "output",
+                typ: "string",
+                description: "Output path",
+                optional: false,
+            },
+            LuaParam {
+                name: "opts",
+                typ: "{ minify?: boolean, purge?: boolean, safelist?: string[] }",
+                description: "Options",
+                optional: true,
+            },
+        ],
+        returns: "AsyncIOTask",
+        generic_return: Some("nil"),
     },
     LuaFunction {
         name: "bundle",
         module: Some("css"),
-        description: "Bundle and minify CSS",
+        description: "Bundle and minify CSS with LightningCSS (async)",
         params: &[
             LuaParam {
                 name: "input",
@@ -1560,12 +1888,88 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
             LuaParam {
                 name: "opts",
-                typ: "{ minify?: boolean }",
+                typ: "{ minify?: boolean, purge?: boolean, safelist?: string[] }",
                 description: "Options",
                 optional: true,
             },
         ],
-        returns: "boolean",
+        returns: "AsyncIOTask",
+        generic_return: Some("nil"),
+    },
+    LuaFunction {
+        name: "purge",
+        module: Some("css"),
+        description: "Purge unused CSS rules from a CSS file (async)",
+        params: &[
+            LuaParam {
+                name: "css_path",
+                typ: "string",
+                description: "Path to CSS file",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "{ safelist?: string[] }",
+                description: "Purge options",
+                optional: true,
+            },
+        ],
+        returns: "AsyncIOTask",
+        generic_return: Some("nil"),
+    },
+    LuaFunction {
+        name: "critical",
+        module: Some("css"),
+        description: "Extract critical CSS for HTML content (async)",
+        params: &[
+            LuaParam {
+                name: "html_content",
+                typ: "string",
+                description: "HTML content to analyze",
+                optional: false,
+            },
+            LuaParam {
+                name: "css_path",
+                typ: "string",
+                description: "Path to CSS file",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "{ minify?: boolean, safelist?: string[] }",
+                description: "Options",
+                optional: true,
+            },
+        ],
+        returns: "AsyncIOTask",
+        generic_return: Some("string"),
+    },
+    LuaFunction {
+        name: "inline_critical",
+        module: Some("css"),
+        description: "Inline critical CSS into HTML file (async)",
+        params: &[
+            LuaParam {
+                name: "html_path",
+                typ: "string",
+                description: "Path to HTML file",
+                optional: false,
+            },
+            LuaParam {
+                name: "css_path",
+                typ: "string",
+                description: "Path to CSS file",
+                optional: false,
+            },
+            LuaParam {
+                name: "options",
+                typ: "{ minify?: boolean, safelist?: string[], css_href?: string }",
+                description: "Options",
+                optional: true,
+            },
+        ],
+        returns: "AsyncIOTask",
+        generic_return: Some("nil"),
     },
     // ========================================================================
     // rs.fonts - Font Handling
@@ -1573,28 +1977,23 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "download_google_font",
         module: Some("fonts"),
-        description: "Download Google Font files",
+        description: "Download Google Font files (async)",
         params: &[
             LuaParam {
-                name: "font_name",
+                name: "family",
                 typ: "string",
-                description: "Font name",
+                description: "Font family name",
                 optional: false,
             },
             LuaParam {
-                name: "output_dir",
-                typ: "string",
-                description: "Output directory",
+                name: "options",
+                typ: "{ fonts_dir: string, css_path: string, css_prefix?: string, weights?: number[], display?: string, cache?: boolean|string, minify?: boolean }",
+                description: "Download options",
                 optional: false,
-            },
-            LuaParam {
-                name: "opts",
-                typ: "{ weights?: number[], formats?: string[] }",
-                description: "Options",
-                optional: true,
             },
         ],
-        returns: "{ css: string, files: string[] }",
+        returns: "AsyncIOTask",
+        generic_return: Some("nil"),
     },
     // ========================================================================
     // rs.crypt - Encryption
@@ -1618,6 +2017,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "string",
+        generic_return: None,
     },
     LuaFunction {
         name: "decrypt",
@@ -1638,6 +2038,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "string|nil",
+        generic_return: None,
     },
     LuaFunction {
         name: "encrypt_html",
@@ -1658,6 +2059,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "string",
+        generic_return: None,
     },
     // ========================================================================
     // rs.pwa - PWA Generation
@@ -1665,42 +2067,28 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "manifest",
         module: Some("pwa"),
-        description: "Generate PWA manifest.json",
-        params: &[
-            LuaParam {
-                name: "config",
-                typ: "table",
-                description: "Manifest configuration",
-                optional: false,
-            },
-            LuaParam {
-                name: "output",
-                typ: "string",
-                description: "Output path",
-                optional: false,
-            },
-        ],
-        returns: "boolean",
+        description: "Generate PWA manifest.json (async)",
+        params: &[LuaParam {
+            name: "options",
+            typ: "{ name: string, short_name: string, output: string, description?: string, start_url?: string, display?: string, background_color?: string, theme_color?: string, icons?: { src: string, sizes: string, type?: string, purpose?: string }[] }",
+            description: "Manifest configuration",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+        generic_return: Some("nil"),
     },
     LuaFunction {
         name: "service_worker",
         module: Some("pwa"),
-        description: "Generate service worker",
-        params: &[
-            LuaParam {
-                name: "config",
-                typ: "table",
-                description: "Service worker configuration",
-                optional: false,
-            },
-            LuaParam {
-                name: "output",
-                typ: "string",
-                description: "Output path",
-                optional: false,
-            },
-        ],
-        returns: "boolean",
+        description: "Generate service worker (async)",
+        params: &[LuaParam {
+            name: "options",
+            typ: "{ cache_name: string, output: string, version?: string, precache?: string[], network_first?: string[], cache_first?: string[], offline_page?: string }",
+            description: "Service worker configuration",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+        generic_return: Some("nil"),
     },
     // ========================================================================
     // rs.seo - SEO Generation
@@ -1708,42 +2096,28 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "sitemap",
         module: Some("seo"),
-        description: "Generate sitemap.xml",
-        params: &[
-            LuaParam {
-                name: "urls",
-                typ: "{ loc: string, lastmod?: string, changefreq?: string, priority?: number }[]",
-                description: "URL entries",
-                optional: false,
-            },
-            LuaParam {
-                name: "output",
-                typ: "string",
-                description: "Output path",
-                optional: false,
-            },
-        ],
-        returns: "boolean",
+        description: "Generate sitemap.xml (async)",
+        params: &[LuaParam {
+            name: "options",
+            typ: "{ base_url: string, pages: (string | { path: string, lastmod?: string, changefreq?: string, priority?: number })[], output: string, default_changefreq?: string, default_priority?: number, exclude?: string[] }",
+            description: "Sitemap configuration",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+        generic_return: Some("nil"),
     },
     LuaFunction {
         name: "robots",
         module: Some("seo"),
-        description: "Generate robots.txt",
-        params: &[
-            LuaParam {
-                name: "config",
-                typ: "{ sitemap?: string, allow?: string[], disallow?: string[] }",
-                description: "Robots configuration",
-                optional: false,
-            },
-            LuaParam {
-                name: "output",
-                typ: "string",
-                description: "Output path",
-                optional: false,
-            },
-        ],
-        returns: "boolean",
+        description: "Generate robots.txt (async)",
+        params: &[LuaParam {
+            name: "options",
+            typ: "{ output: string, sitemap_url?: string, allow?: string[], disallow?: string[], user_agent?: string }",
+            description: "Robots configuration",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+        generic_return: Some("nil"),
     },
     // ========================================================================
     // rs.coro - Coroutines
@@ -1759,6 +2133,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "Task",
+        generic_return: None,
     },
     LuaFunction {
         name: "await",
@@ -1771,6 +2146,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             optional: false,
         }],
         returns: "any",
+        generic_return: None,
     },
     // ========================================================================
     // rs.parallel - Parallel Processing (legacy)
@@ -1800,6 +2176,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "U[]",
+        generic_return: None,
     },
     LuaFunction {
         name: "filter",
@@ -1826,6 +2203,7 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
         ],
         returns: "T[]",
+        generic_return: None,
     },
     // ========================================================================
     // rs.async - Async I/O
@@ -1843,12 +2221,384 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
             },
             LuaParam {
                 name: "opts",
+                typ: "{ method?: string, headers?: table, body?: string, timeout?: number, cache?: boolean|string }",
+                description: "Request options",
+                optional: true,
+            },
+        ],
+        returns: "AsyncTask",
+        generic_return: Some("FetchResponse"),
+    },
+    LuaFunction {
+        name: "fetch_sync",
+        module: Some("async"),
+        description: "Fetch URL content synchronously",
+        params: &[
+            LuaParam {
+                name: "url",
+                typ: "string",
+                description: "URL to fetch",
+                optional: false,
+            },
+            LuaParam {
+                name: "opts",
+                typ: "{ method?: string, headers?: table, body?: string, timeout?: number, cache?: boolean|string }",
+                description: "Request options",
+                optional: true,
+            },
+        ],
+        returns: "FetchResponse",
+        generic_return: None,
+    },
+    LuaFunction {
+        name: "fetch_json",
+        module: Some("async"),
+        description: "Fetch and parse JSON",
+        params: &[
+            LuaParam {
+                name: "url",
+                typ: "string",
+                description: "URL to fetch",
+                optional: false,
+            },
+            LuaParam {
+                name: "opts",
+                typ: "{ method?: string, headers?: table, body?: string, timeout?: number }",
+                description: "Request options",
+                optional: true,
+            },
+        ],
+        returns: "any",
+        generic_return: None,
+    },
+    LuaFunction {
+        name: "fetch_bytes",
+        module: Some("async"),
+        description: "Fetch binary data, returns task for await",
+        params: &[
+            LuaParam {
+                name: "url",
+                typ: "string",
+                description: "URL to fetch",
+                optional: false,
+            },
+            LuaParam {
+                name: "opts",
+                typ: "{ method?: string, headers?: table, body?: string, timeout?: number, cache?: boolean|string }",
+                description: "Request options",
+                optional: true,
+            },
+        ],
+        returns: "AsyncTask",
+        generic_return: Some("FetchResponse"),
+    },
+    LuaFunction {
+        name: "fetch_bytes_sync",
+        module: Some("async"),
+        description: "Fetch binary data synchronously",
+        params: &[
+            LuaParam {
+                name: "url",
+                typ: "string",
+                description: "URL to fetch",
+                optional: false,
+            },
+            LuaParam {
+                name: "opts",
+                typ: "{ method?: string, headers?: table, body?: string, timeout?: number, cache?: boolean|string }",
+                description: "Request options",
+                optional: true,
+            },
+        ],
+        returns: "{ status: number, ok: boolean, body: string }",
+        generic_return: None,
+    },
+    LuaFunction {
+        name: "fetch_all",
+        module: Some("async"),
+        description: "Fetch multiple URLs concurrently",
+        params: &[LuaParam {
+            name: "requests",
+            typ: "(string | { url: string, options?: table })[]",
+            description: "URLs or request objects",
+            optional: false,
+        }],
+        returns: "FetchResponse[]",
+        generic_return: None,
+    },
+    LuaFunction {
+        name: "spawn",
+        module: Some("async"),
+        description: "Spawn a fetch task for later await",
+        params: &[
+            LuaParam {
+                name: "url",
+                typ: "string",
+                description: "URL to fetch",
+                optional: false,
+            },
+            LuaParam {
+                name: "opts",
                 typ: "{ method?: string, headers?: table, body?: string }",
                 description: "Request options",
                 optional: true,
             },
         ],
-        returns: "AsyncIOTask<string>",
+        returns: "AsyncTask",
+        generic_return: Some("FetchResponse"),
+    },
+    LuaFunction {
+        name: "wrap",
+        module: Some("async"),
+        description: "Wrap a Lua function for deferred execution",
+        params: &[LuaParam {
+            name: "fn",
+            typ: "function",
+            description: "Function to wrap",
+            optional: false,
+        }],
+        returns: "AsyncLuaTask",
+        generic_return: Some("T"),
+    },
+    LuaFunction {
+        name: "await",
+        module: Some("async"),
+        description: "Await an async task",
+        params: &[LuaParam {
+            name: "task",
+            typ: "AsyncTask|AsyncIOTask|AsyncLuaTask",
+            description: "Task to await",
+            optional: false,
+        }],
+        returns: "any",
+        generic_return: None,
+    },
+    LuaFunction {
+        name: "await_all",
+        module: Some("async"),
+        description: "Await multiple tasks concurrently",
+        params: &[LuaParam {
+            name: "tasks",
+            typ: "(AsyncTask|AsyncIOTask|AsyncLuaTask)[]",
+            description: "Tasks to await",
+            optional: false,
+        }],
+        returns: "any[]",
+        generic_return: None,
+    },
+    LuaFunction {
+        name: "read_file",
+        module: Some("async"),
+        description: "Read text file, returns task for await",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "Path to file",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+        generic_return: Some("string"),
+    },
+    LuaFunction {
+        name: "read_files",
+        module: Some("async"),
+        description: "Read multiple files concurrently, returns task for await",
+        params: &[LuaParam {
+            name: "paths",
+            typ: "string[]",
+            description: "Paths to read",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+        generic_return: Some("(string|nil)[]"),
+    },
+    LuaFunction {
+        name: "write_file",
+        module: Some("async"),
+        description: "Write text file, returns task for await",
+        params: &[
+            LuaParam {
+                name: "path",
+                typ: "string",
+                description: "Path to write",
+                optional: false,
+            },
+            LuaParam {
+                name: "content",
+                typ: "string",
+                description: "Content to write",
+                optional: false,
+            },
+        ],
+        returns: "AsyncIOTask",
+        generic_return: Some("boolean"),
+    },
+    LuaFunction {
+        name: "write",
+        module: Some("async"),
+        description: "Write binary file, returns task for await",
+        params: &[
+            LuaParam {
+                name: "path",
+                typ: "string",
+                description: "Path to write",
+                optional: false,
+            },
+            LuaParam {
+                name: "data",
+                typ: "string",
+                description: "Binary data to write",
+                optional: false,
+            },
+        ],
+        returns: "AsyncIOTask",
+        generic_return: Some("boolean"),
+    },
+    LuaFunction {
+        name: "exists",
+        module: Some("async"),
+        description: "Check if path exists, returns task for await",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "Path to check",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+        generic_return: Some("boolean"),
+    },
+    LuaFunction {
+        name: "load_json",
+        module: Some("async"),
+        description: "Load and parse JSON file, returns task for await",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "Path to JSON file",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+        generic_return: Some("any"),
+    },
+    LuaFunction {
+        name: "copy_file",
+        module: Some("async"),
+        description: "Copy file, returns task for await",
+        params: &[
+            LuaParam {
+                name: "src",
+                typ: "string",
+                description: "Source path",
+                optional: false,
+            },
+            LuaParam {
+                name: "dst",
+                typ: "string",
+                description: "Destination path",
+                optional: false,
+            },
+        ],
+        returns: "AsyncIOTask",
+        generic_return: Some("number"),
+    },
+    LuaFunction {
+        name: "rename",
+        module: Some("async"),
+        description: "Rename file or directory, returns task for await",
+        params: &[
+            LuaParam {
+                name: "src",
+                typ: "string",
+                description: "Source path",
+                optional: false,
+            },
+            LuaParam {
+                name: "dst",
+                typ: "string",
+                description: "Destination path",
+                optional: false,
+            },
+        ],
+        returns: "AsyncIOTask",
+        generic_return: Some("boolean"),
+    },
+    LuaFunction {
+        name: "create_dir",
+        module: Some("async"),
+        description: "Create directory, returns task for await",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "Directory path",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+        generic_return: Some("boolean"),
+    },
+    LuaFunction {
+        name: "remove_file",
+        module: Some("async"),
+        description: "Remove file, returns task for await",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "File path",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+        generic_return: Some("boolean"),
+    },
+    LuaFunction {
+        name: "remove_dir",
+        module: Some("async"),
+        description: "Remove directory recursively, returns task for await",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "Directory path",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+        generic_return: Some("boolean"),
+    },
+    LuaFunction {
+        name: "metadata",
+        module: Some("async"),
+        description: "Get file metadata, returns task for await",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "Path to file/directory",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+        generic_return: Some("FileMetadata"),
+    },
+    LuaFunction {
+        name: "read_dir",
+        module: Some("async"),
+        description: "List directory contents, returns task for await",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "Directory path",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+        generic_return: Some("DirEntry[]"),
+    },
+    LuaFunction {
+        name: "canonicalize",
+        module: Some("async"),
+        description: "Get canonical/absolute path, returns task for await",
+        params: &[LuaParam {
+            name: "path",
+            typ: "string",
+            description: "Path to resolve",
+            optional: false,
+        }],
+        returns: "AsyncIOTask",
+        generic_return: Some("string"),
     },
 ];
 
@@ -1864,7 +2614,12 @@ pub fn generate_emmylua() -> String {
 
     // Generate class definitions
     for class in LUA_CLASSES {
-        output.push_str(&format!("---@class {}\n", class.name));
+        if class.is_generic {
+            // Generic class with type parameter
+            output.push_str(&format!("---@class {}<T>\n", class.name));
+        } else {
+            output.push_str(&format!("---@class {}\n", class.name));
+        }
         for field in class.fields {
             output.push_str(&format!(
                 "---@field {} {} {}\n",
@@ -1886,21 +2641,30 @@ pub fn generate_emmylua() -> String {
         modules.entry(mod_name).or_default().push(func);
     }
 
+    // Track declared modules to avoid duplicates
+    let mut declared_modules: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     // Generate each module
-    for (mod_name, funcs) in modules {
+    for (mod_name, funcs) in &modules {
         if mod_name.is_empty() {
             continue;
         }
 
         let parts: Vec<&str> = mod_name.split('.').collect();
-        let base_mod = parts[0];
 
-        output.push_str(&format!("---@class rs.{}\n", base_mod));
-        output.push_str(&format!("rs.{} = {{}}\n\n", base_mod));
+        // Declare all parent modules first
+        let mut current_path = String::new();
+        for (i, part) in parts.iter().enumerate() {
+            if i > 0 {
+                current_path.push('.');
+            }
+            current_path.push_str(part);
 
-        if parts.len() > 1 {
-            output.push_str(&format!("---@class rs.{}\n", mod_name));
-            output.push_str(&format!("rs.{} = {{}}\n\n", mod_name));
+            if !declared_modules.contains(&current_path) {
+                declared_modules.insert(current_path.clone());
+                output.push_str(&format!("---@class rs.{}\n", current_path));
+                output.push_str(&format!("rs.{} = {{}}\n\n", current_path));
+            }
         }
 
         for func in funcs {
@@ -1913,7 +2677,15 @@ pub fn generate_emmylua() -> String {
                     param.name, optional, param.typ, param.description
                 ));
             }
-            output.push_str(&format!("---@return {}\n", func.returns));
+
+            // Handle generic return types
+            let return_type = if let Some(inner_type) = func.generic_return {
+                format!("{}<{}>", func.returns, inner_type)
+            } else {
+                func.returns.to_string()
+            };
+            output.push_str(&format!("---@return {}\n", return_type));
+
             output.push_str(&format!("function rs.{}.{}(", mod_name, func.name));
             let param_names: Vec<&str> = func.params.iter().map(|p| p.name).collect();
             output.push_str(&param_names.join(", "));

@@ -241,10 +241,11 @@ type IOResult = std::result::Result<IOResponse, String>;
 /// I/O operation response - can hold different result types
 #[derive(Clone)]
 enum IOResponse {
-    Ok,             // For operations that just succeed (create_dir, write)
-    Bytes(u64),     // For copy (bytes copied)
-    Bool(bool),     // For exists check
-    String(String), // For read operations
+    Ok,                      // For operations that just succeed (create_dir, write)
+    Bytes(u64),              // For copy (bytes copied)
+    Bool(bool),              // For exists check
+    String(String),          // For read operations
+    Json(serde_json::Value), // For structured data (tables)
 }
 
 impl IOResponse {
@@ -254,6 +255,7 @@ impl IOResponse {
             IOResponse::Bytes(n) => Ok(Value::Integer(*n as i64)),
             IOResponse::Bool(b) => Ok(Value::Boolean(*b)),
             IOResponse::String(s) => Ok(Value::String(lua.create_string(s)?)),
+            IOResponse::Json(v) => lua.to_value(v),
         }
     }
 }
@@ -290,6 +292,44 @@ impl AsyncIOTask {
         let wrapped_handle = runtime().spawn(async move {
             match handle.await {
                 Ok(Ok(s)) => Ok(IOResponse::String(s)),
+                Ok(Err(e)) => Err(e),
+                Err(e) => Err(format!("Task panicked: {}", e)),
+            }
+        });
+
+        Self {
+            handle: Arc::new(Mutex::new(Some(wrapped_handle))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        }
+    }
+
+    /// Create a new AsyncIOTask from a JoinHandle that returns Result<serde_json::Value, String>
+    pub fn from_json_handle(
+        handle: JoinHandle<std::result::Result<serde_json::Value, String>>,
+    ) -> Self {
+        // Wrap the handle to convert Result<serde_json::Value, String> to IOResult
+        let wrapped_handle = runtime().spawn(async move {
+            match handle.await {
+                Ok(Ok(v)) => Ok(IOResponse::Json(v)),
+                Ok(Err(e)) => Err(e),
+                Err(e) => Err(format!("Task panicked: {}", e)),
+            }
+        });
+
+        Self {
+            handle: Arc::new(Mutex::new(Some(wrapped_handle))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        }
+    }
+
+    /// Create a new AsyncIOTask from a JoinHandle that returns Result<bool, String>
+    pub fn from_bool_handle(handle: JoinHandle<std::result::Result<bool, String>>) -> Self {
+        // Wrap the handle to convert Result<bool, String> to IOResult
+        let wrapped_handle = runtime().spawn(async move {
+            match handle.await {
+                Ok(Ok(b)) => Ok(IOResponse::Bool(b)),
                 Ok(Err(e)) => Err(e),
                 Err(e) => Err(format!("Task panicked: {}", e)),
             }
@@ -1180,52 +1220,6 @@ pub fn create_module(
     })?;
     async_module.set("await_all", await_all)?;
 
-    // async.read(path) - Async binary file read
-    let root_clone = root.clone();
-    let read = lua.create_function(move |lua, path: String| {
-        let resolved = resolve_path(&path, &root_clone);
-        if sandbox && !is_path_within_root(&resolved, &root_clone) {
-            return Err(mlua::Error::RuntimeError(format!(
-                "Sandbox: cannot access '{}' outside project directory",
-                path
-            )));
-        }
-
-        let result = block_on(async { tokio::fs::read(&resolved).await });
-
-        match result {
-            Ok(bytes) => Ok(Value::String(lua.create_string(&bytes)?)),
-            Err(e) => Err(mlua::Error::RuntimeError(format!(
-                "Failed to read file '{}': {}",
-                path, e
-            ))),
-        }
-    })?;
-    async_module.set("read", read)?;
-
-    // async.read_file(path) - Async file read (text)
-    let root_clone = root.clone();
-    let read_file = lua.create_function(move |lua, path: String| {
-        let resolved = resolve_path(&path, &root_clone);
-        if sandbox && !is_path_within_root(&resolved, &root_clone) {
-            return Err(mlua::Error::RuntimeError(format!(
-                "Sandbox: cannot access '{}' outside project directory",
-                path
-            )));
-        }
-
-        let result = block_on(async { tokio::fs::read_to_string(&resolved).await });
-
-        match result {
-            Ok(content) => Ok(Value::String(lua.create_string(&content)?)),
-            Err(e) => Err(mlua::Error::RuntimeError(format!(
-                "Failed to read file '{}': {}",
-                path, e
-            ))),
-        }
-    })?;
-    async_module.set("read_file", read_file)?;
-
     // async.write_file(path, content) - Async file write, returns handle
     let root_clone = root.clone();
     let tracker_clone = tracker.clone();
@@ -1305,21 +1299,15 @@ pub fn create_module(
     })?;
     async_module.set("write", write)?;
 
-    // async.exists(path) - Async file/dir existence check, returns AsyncIOTask
+    // async.exists(path) - Async file/dir existence check, returns AsyncIOTask<boolean>
     let root_clone = root.clone();
     let exists = lua.create_function(move |_lua, path: String| {
         let resolved = resolve_path(&path, &root_clone);
 
-        let handle = runtime().spawn(async move {
-            let exists = tokio::fs::try_exists(&resolved).await.unwrap_or(false);
-            Ok(IOResponse::Bool(exists))
-        });
+        let handle = runtime()
+            .spawn(async move { Ok(tokio::fs::try_exists(&resolved).await.unwrap_or(false)) });
 
-        Ok(AsyncIOTask {
-            handle: Arc::new(Mutex::new(Some(handle))),
-            result: Arc::new(Mutex::new(None)),
-            completed: Arc::new(Mutex::new(false)),
-        })
+        Ok(AsyncIOTask::from_bool_handle(handle))
     })?;
     async_module.set("exists", exists)?;
 
@@ -1352,9 +1340,9 @@ pub fn create_module(
     })?;
     async_module.set("read_file", read_file)?;
 
-    // async.read_files(paths) - Async batch file read
+    // async.read_files(paths) - Async batch file read, returns AsyncIOTask<(string|nil)[]>
     let root_clone = root.clone();
-    let read_files = lua.create_function(move |lua, paths: Vec<String>| {
+    let read_files = lua.create_function(move |_lua, paths: Vec<String>| {
         let resolved_paths: Vec<PathBuf> =
             paths.iter().map(|p| resolve_path(p, &root_clone)).collect();
 
@@ -1370,37 +1358,32 @@ pub fn create_module(
             }
         }
 
-        // Read all files concurrently
-        let results = block_on(async {
+        let handle = runtime().spawn(async move {
             let futures: Vec<_> = resolved_paths
                 .iter()
                 .map(tokio::fs::read_to_string)
                 .collect();
-            futures::future::join_all(futures).await
+            let results = futures::future::join_all(futures).await;
+
+            // Collect results as JSON array (null for failures)
+            let contents: Vec<serde_json::Value> = results
+                .into_iter()
+                .map(|r| match r {
+                    Ok(s) => serde_json::Value::String(s),
+                    Err(_) => serde_json::Value::Null,
+                })
+                .collect();
+
+            Ok(serde_json::Value::Array(contents))
         });
 
-        // Convert to Lua table
-        let result_table = lua.create_table()?;
-        for (i, result) in results.into_iter().enumerate() {
-            match result {
-                Ok(content) => {
-                    result_table.set(i + 1, content)?;
-                }
-                Err(e) => {
-                    // Set nil for failed reads but continue
-                    result_table.set(i + 1, Value::Nil)?;
-                    log::warn!("Failed to read '{}': {}", paths[i], e);
-                }
-            }
-        }
-
-        Ok(Value::Table(result_table))
+        Ok(AsyncIOTask::from_json_handle(handle))
     })?;
     async_module.set("read_files", read_files)?;
 
-    // async.load_json(path) - Async JSON file load
+    // async.load_json(path) - Async JSON file load, returns AsyncIOTask<any>
     let root_clone = root.clone();
-    let load_json = lua.create_function(move |lua, path: String| {
+    let load_json = lua.create_function(move |_lua, path: String| {
         let resolved = resolve_path(&path, &root_clone);
         if sandbox && !is_path_within_root(&resolved, &root_clone) {
             return Err(mlua::Error::RuntimeError(format!(
@@ -1409,21 +1392,16 @@ pub fn create_module(
             )));
         }
 
-        let result = block_on(async { tokio::fs::read_to_string(&resolved).await });
+        let handle = runtime().spawn(async move {
+            let content = tokio::fs::read_to_string(&resolved)
+                .await
+                .map_err(|e| format!("Failed to read file: {}", e))?;
 
-        match result {
-            Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
-                Ok(v) => lua.to_value(&v),
-                Err(e) => Err(mlua::Error::RuntimeError(format!(
-                    "Failed to parse JSON from '{}': {}",
-                    path, e
-                ))),
-            },
-            Err(e) => Err(mlua::Error::RuntimeError(format!(
-                "Failed to read file '{}': {}",
-                path, e
-            ))),
-        }
+            serde_json::from_str::<serde_json::Value>(&content)
+                .map_err(|e| format!("Failed to parse JSON: {}", e))
+        });
+
+        Ok(AsyncIOTask::from_json_handle(handle))
     })?;
     async_module.set("load_json", load_json)?;
 
@@ -1483,7 +1461,7 @@ pub fn create_module(
     })?;
     async_module.set("copy_file", copy_file)?;
 
-    // async.rename(src, dst) - Async file/dir rename
+    // async.rename(src, dst) - Async file/dir rename, returns AsyncIOTask
     let root_clone = root.clone();
     let rename = lua.create_function(move |_, (src, dst): (String, String)| {
         let src_resolved = resolve_path(&src, &root_clone);
@@ -1504,23 +1482,23 @@ pub fn create_module(
             }
         }
 
-        // Ensure parent directory exists
-        if let Some(parent) = dst_resolved.parent() {
-            let parent = parent.to_path_buf();
-            block_on(async {
-                tokio::fs::create_dir_all(&parent).await.ok();
-            });
-        }
+        let handle = runtime().spawn(async move {
+            // Ensure parent directory exists
+            if let Some(parent) = dst_resolved.parent() {
+                tokio::fs::create_dir_all(parent).await.ok();
+            }
 
-        let result = block_on(async { tokio::fs::rename(&src_resolved, &dst_resolved).await });
+            tokio::fs::rename(&src_resolved, &dst_resolved)
+                .await
+                .map(|()| IOResponse::Ok)
+                .map_err(|e| format!("Failed to rename: {}", e))
+        });
 
-        match result {
-            Ok(()) => Ok(true),
-            Err(e) => Err(mlua::Error::RuntimeError(format!(
-                "Failed to rename '{}' to '{}': {}",
-                src, dst, e
-            ))),
-        }
+        Ok(AsyncIOTask {
+            handle: Arc::new(Mutex::new(Some(handle))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        })
     })?;
     async_module.set("rename", rename)?;
 
@@ -1551,7 +1529,7 @@ pub fn create_module(
     })?;
     async_module.set("create_dir", create_dir)?;
 
-    // async.remove_file(path) - Async file removal
+    // async.remove_file(path) - Async file removal, returns AsyncIOTask
     let root_clone = root.clone();
     let remove_file = lua.create_function(move |_, path: String| {
         let resolved = resolve_path(&path, &root_clone);
@@ -1563,19 +1541,22 @@ pub fn create_module(
             )));
         }
 
-        let result = block_on(async { tokio::fs::remove_file(&resolved).await });
+        let handle = runtime().spawn(async move {
+            tokio::fs::remove_file(&resolved)
+                .await
+                .map(|()| IOResponse::Ok)
+                .map_err(|e| format!("Failed to remove file: {}", e))
+        });
 
-        match result {
-            Ok(()) => Ok(true),
-            Err(e) => Err(mlua::Error::RuntimeError(format!(
-                "Failed to remove file '{}': {}",
-                path, e
-            ))),
-        }
+        Ok(AsyncIOTask {
+            handle: Arc::new(Mutex::new(Some(handle))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        })
     })?;
     async_module.set("remove_file", remove_file)?;
 
-    // async.remove_dir(path) - Async directory removal (recursive)
+    // async.remove_dir(path) - Async directory removal (recursive), returns AsyncIOTask
     let root_clone = root.clone();
     let remove_dir = lua.create_function(move |_, path: String| {
         let resolved = resolve_path(&path, &root_clone);
@@ -1587,21 +1568,24 @@ pub fn create_module(
             )));
         }
 
-        let result = block_on(async { tokio::fs::remove_dir_all(&resolved).await });
+        let handle = runtime().spawn(async move {
+            tokio::fs::remove_dir_all(&resolved)
+                .await
+                .map(|()| IOResponse::Ok)
+                .map_err(|e| format!("Failed to remove directory: {}", e))
+        });
 
-        match result {
-            Ok(()) => Ok(true),
-            Err(e) => Err(mlua::Error::RuntimeError(format!(
-                "Failed to remove directory '{}': {}",
-                path, e
-            ))),
-        }
+        Ok(AsyncIOTask {
+            handle: Arc::new(Mutex::new(Some(handle))),
+            result: Arc::new(Mutex::new(None)),
+            completed: Arc::new(Mutex::new(false)),
+        })
     })?;
     async_module.set("remove_dir", remove_dir)?;
 
-    // async.exists(path) - Async check if file/dir exists
+    // async.metadata(path) - Async get file metadata, returns AsyncIOTask<FileMetadata>
     let root_clone = root.clone();
-    let exists = lua.create_function(move |_, path: String| {
+    let metadata = lua.create_function(move |_lua, path: String| {
         let resolved = resolve_path(&path, &root_clone);
 
         if sandbox && !is_path_within_root(&resolved, &root_clone) {
@@ -1611,125 +1595,84 @@ pub fn create_module(
             )));
         }
 
-        let result = block_on(async { tokio::fs::try_exists(&resolved).await });
+        let handle = runtime().spawn(async move {
+            let meta = tokio::fs::metadata(&resolved)
+                .await
+                .map_err(|e| format!("Failed to get metadata: {}", e))?;
 
-        match result {
-            Ok(exists) => Ok(exists),
-            Err(e) => Err(mlua::Error::RuntimeError(format!(
-                "Failed to check existence of '{}': {}",
-                path, e
-            ))),
-        }
-    })?;
-    async_module.set("exists", exists)?;
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
 
-    // async.metadata(path) - Async get file metadata
-    let root_clone = root.clone();
-    let metadata = lua.create_function(move |lua, path: String| {
-        let resolved = resolve_path(&path, &root_clone);
+            Ok(serde_json::json!({
+                "is_file": meta.is_file(),
+                "is_dir": meta.is_dir(),
+                "len": meta.len(),
+                "readonly": meta.permissions().readonly(),
+                "modified": modified,
+            }))
+        });
 
-        if sandbox && !is_path_within_root(&resolved, &root_clone) {
-            return Err(mlua::Error::RuntimeError(format!(
-                "Sandbox: cannot access '{}' outside project directory",
-                path
-            )));
-        }
-
-        let result = block_on(async { tokio::fs::metadata(&resolved).await });
-
-        match result {
-            Ok(meta) => {
-                let table = lua.create_table()?;
-                table.set("is_file", meta.is_file())?;
-                table.set("is_dir", meta.is_dir())?;
-                table.set("len", meta.len())?;
-                table.set("readonly", meta.permissions().readonly())?;
-
-                // Add modified time if available
-                if let Ok(modified) = meta.modified()
-                    && let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH)
-                {
-                    table.set("modified", duration.as_secs())?;
-                }
-
-                Ok(Value::Table(table))
-            }
-            Err(e) => Err(mlua::Error::RuntimeError(format!(
-                "Failed to get metadata for '{}': {}",
-                path, e
-            ))),
-        }
+        Ok(AsyncIOTask::from_json_handle(handle))
     })?;
     async_module.set("metadata", metadata)?;
 
-    // async.read_dir(path) - Async directory listing
+    // async.read_dir(path) - Async directory listing, returns AsyncIOTask<DirEntry[]>
     let root_clone = root.clone();
-    let read_dir = lua.create_function(move |lua, path: String| {
+    let sandbox_clone = sandbox;
+    let read_dir = lua.create_function(move |_lua, path: String| {
         let resolved = resolve_path(&path, &root_clone);
+        let root_for_filter = root_clone.clone();
 
-        if sandbox && !is_path_within_root(&resolved, &root_clone) {
+        if sandbox_clone && !is_path_within_root(&resolved, &root_clone) {
             return Err(mlua::Error::RuntimeError(format!(
                 "Sandbox: cannot access '{}' outside project directory",
                 path
             )));
         }
 
-        // Collect entry info inside async block
-        struct EntryInfo {
-            path: PathBuf,
-            name: String,
-            is_file: bool,
-            is_dir: bool,
-            is_symlink: bool,
-        }
-
-        let result = block_on(async {
+        let handle = runtime().spawn(async move {
             let mut entries = Vec::new();
-            let mut dir = tokio::fs::read_dir(&resolved).await?;
-            while let Some(entry) = dir.next_entry().await? {
-                let file_type = entry.file_type().await?;
-                entries.push(EntryInfo {
-                    path: entry.path(),
-                    name: entry.file_name().to_string_lossy().to_string(),
-                    is_file: file_type.is_file(),
-                    is_dir: file_type.is_dir(),
-                    is_symlink: file_type.is_symlink(),
-                });
+            let mut dir = tokio::fs::read_dir(&resolved)
+                .await
+                .map_err(|e| format!("Failed to read directory: {}", e))?;
+
+            while let Some(entry) = dir
+                .next_entry()
+                .await
+                .map_err(|e| format!("Failed to read entry: {}", e))?
+            {
+                let entry_path = entry.path();
+
+                // Skip entries outside sandbox
+                if sandbox_clone && !is_path_within_root(&entry_path, &root_for_filter) {
+                    continue;
+                }
+
+                let file_type = entry
+                    .file_type()
+                    .await
+                    .map_err(|e| format!("Failed to get file type: {}", e))?;
+
+                entries.push(serde_json::json!({
+                    "path": entry_path.to_string_lossy(),
+                    "name": entry.file_name().to_string_lossy(),
+                    "is_file": file_type.is_file(),
+                    "is_dir": file_type.is_dir(),
+                    "is_symlink": file_type.is_symlink(),
+                }));
             }
-            Ok::<_, std::io::Error>(entries)
+
+            Ok(serde_json::Value::Array(entries))
         });
 
-        match result {
-            Ok(entries) => {
-                let result_table = lua.create_table()?;
-                let mut idx = 1;
-                for entry in entries {
-                    // Skip entries outside sandbox
-                    if sandbox && !is_path_within_root(&entry.path, &root_clone) {
-                        continue;
-                    }
-
-                    let entry_table = lua.create_table()?;
-                    entry_table.set("path", entry.path.to_string_lossy().to_string())?;
-                    entry_table.set("name", entry.name)?;
-                    entry_table.set("is_file", entry.is_file)?;
-                    entry_table.set("is_dir", entry.is_dir)?;
-                    entry_table.set("is_symlink", entry.is_symlink)?;
-
-                    result_table.set(idx, entry_table)?;
-                    idx += 1;
-                }
-                Ok(Value::Table(result_table))
-            }
-            Err(e) => Err(mlua::Error::RuntimeError(format!(
-                "Failed to read directory '{}': {}",
-                path, e
-            ))),
-        }
+        Ok(AsyncIOTask::from_json_handle(handle))
     })?;
     async_module.set("read_dir", read_dir)?;
 
-    // async.canonicalize(path) - Async get canonical/absolute path
+    // async.canonicalize(path) - Async get canonical/absolute path, returns AsyncIOTask
     let root_clone = root.clone();
     let canonicalize = lua.create_function(move |_, path: String| {
         let resolved = resolve_path(&path, &root_clone);
@@ -1741,15 +1684,14 @@ pub fn create_module(
             )));
         }
 
-        let result = block_on(async { tokio::fs::canonicalize(&resolved).await });
+        let handle = runtime().spawn(async move {
+            tokio::fs::canonicalize(&resolved)
+                .await
+                .map(|p| p.to_string_lossy().to_string())
+                .map_err(|e| format!("Failed to canonicalize: {}", e))
+        });
 
-        match result {
-            Ok(canonical) => Ok(canonical.to_string_lossy().to_string()),
-            Err(e) => Err(mlua::Error::RuntimeError(format!(
-                "Failed to canonicalize '{}': {}",
-                path, e
-            ))),
-        }
+        Ok(AsyncIOTask::from_string_handle(handle))
     })?;
     async_module.set("canonicalize", canonicalize)?;
 
