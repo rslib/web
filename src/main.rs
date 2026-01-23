@@ -34,8 +34,13 @@ impl From<LogLevel> for LevelFilter {
 
 #[derive(Parser)]
 #[command(name = "rs-web")]
+#[command(version, disable_version_flag = true)]
 #[command(about = "A data-driven static site generator", long_about = None)]
 struct Cli {
+    /// Print version
+    #[arg(short = 'v', long, action = clap::ArgAction::Version)]
+    version: (),
+
     /// Enable debug logging (shorthand for --log-level debug)
     #[arg(long, global = true)]
     debug: bool,
