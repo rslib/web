@@ -198,13 +198,23 @@ Parallel data operations:
 | `rs.html.extract_links(html)` | Extract all links from HTML |
 | `rs.html.extract_images(html)` | Extract all image sources from HTML |
 
-**Date Formatting (rs.date):**
+**Date & Time (rs.date):**
+
+All date functions accept: Unix timestamp (number), date string, or table `{year, month, day, hour?, min?, sec?}`
 
 | Function | Description |
 |----------|-------------|
-| `rs.date.format(date, format)` | Format a date string |
-| `rs.date.parse(str)` | Parse date string to table {year, month, day} |
-| `rs.date.rss_format(date_string)` | Format date for RSS (RFC 2822) |
+| `rs.date.now()` | Get current Unix timestamp |
+| `rs.date.from_timestamp(ts)` | Convert Unix timestamp to DateTime table |
+| `rs.date.to_timestamp(date)` | Convert date to Unix timestamp |
+| `rs.date.format(date, format)` | Format date using strftime format |
+| `rs.date.parse(str, format?)` | Parse date string to DateTime table (auto-detects or custom format) |
+| `rs.date.rss_format(date)` | Format date for RSS (RFC 2822) |
+| `rs.date.iso_format(date)` | Format date as ISO 8601 |
+| `rs.date.add(date, delta)` | Add time: `{years?, months?, days?, hours?, mins?, secs?}` |
+| `rs.date.diff(date1, date2)` | Get difference in seconds |
+
+DateTime table: `{year, month, day, hour, min, sec, weekday, yday}`
 
 **Markdown (rs.markdown):**
 
@@ -393,7 +403,7 @@ Parallel collection operations:
 
 | Function | Description |
 |----------|-------------|
-| `rs.git.info(path?)` | Get git info for repo or file (hash, branch, author, date, dirty) |
+| `rs.git.info(path?)` | Get git info for repo or file (hash, branch, author, timestamp, dirty) |
 | `rs.git.is_ignored(path)` | Check if path is gitignored |
 
 **Note:** All file operations respect the sandbox setting and are tracked for incremental builds. Paths can be relative (resolved from project root) or absolute.

@@ -6,18 +6,18 @@ use std::path::Path;
 use std::sync::OnceLock;
 use tera::{Function, Value};
 
-struct GitInfo {
-    hash: Option<String>,
-    short_hash: Option<String>,
-    branch: Option<String>,
-    commit_date: Option<i64>,
-    commit_message: Option<String>,
-    is_dirty: bool,
+pub struct GitInfo {
+    pub hash: Option<String>,
+    pub short_hash: Option<String>,
+    pub branch: Option<String>,
+    pub commit_timestamp: Option<i64>,
+    pub commit_message: Option<String>,
+    pub is_dirty: bool,
 }
 
 static GIT_INFO: OnceLock<GitInfo> = OnceLock::new();
 
-fn get_git_info() -> &'static GitInfo {
+pub fn get_git_info() -> &'static GitInfo {
     GIT_INFO.get_or_init(|| {
         let repo = match Repository::discover(".") {
             Ok(r) => r,
@@ -26,7 +26,7 @@ fn get_git_info() -> &'static GitInfo {
                     hash: None,
                     short_hash: None,
                     branch: None,
-                    commit_date: None,
+                    commit_timestamp: None,
                     commit_message: None,
                     is_dirty: false,
                 };
@@ -48,7 +48,7 @@ fn get_git_info() -> &'static GitInfo {
             }
         });
 
-        let commit_date = commit.as_ref().map(|c| c.time().seconds());
+        let commit_timestamp = commit.as_ref().map(|c| c.time().seconds());
         let commit_message = commit
             .as_ref()
             .and_then(|c| c.message().map(|m| m.trim().to_string()));
@@ -59,7 +59,7 @@ fn get_git_info() -> &'static GitInfo {
             hash,
             short_hash,
             branch,
-            commit_date,
+            commit_timestamp,
             commit_message,
             is_dirty,
         }
@@ -96,10 +96,10 @@ pub fn make_git_branch() -> impl Function {
     }
 }
 
-pub fn make_git_commit_date() -> impl Function {
+pub fn make_git_commit_timestamp() -> impl Function {
     |_: &HashMap<String, Value>| -> tera::Result<Value> {
         Ok(get_git_info()
-            .commit_date
+            .commit_timestamp
             .map(|ts| Value::Number(ts.into()))
             .unwrap_or(Value::Null))
     }
@@ -123,7 +123,7 @@ pub fn register_git_functions(tera: &mut tera::Tera) {
     tera.register_function("git_hash", make_git_hash());
     tera.register_function("git_short_hash", make_git_short_hash());
     tera.register_function("git_branch", make_git_branch());
-    tera.register_function("git_commit_date", make_git_commit_date());
+    tera.register_function("git_commit_timestamp", make_git_commit_timestamp());
     tera.register_function("git_commit_message", make_git_commit_message());
     tera.register_function("git_is_dirty", make_git_is_dirty());
 }
@@ -133,7 +133,7 @@ pub fn register_git_functions(tera: &mut tera::Tera) {
 pub struct FileGitInfo {
     pub hash: Option<String>,
     pub short_hash: Option<String>,
-    pub commit_date: Option<i64>,
+    pub commit_timestamp: Option<i64>,
     pub author: Option<String>,
     pub is_dirty: bool,
 }
@@ -240,13 +240,13 @@ pub fn get_file_git_info(path: &Path) -> FileGitInfo {
         if path_changed {
             let hash = oid.to_string();
             let short_hash = hash[..7].to_string();
-            let commit_date = commit.time().seconds();
+            let commit_timestamp = commit.time().seconds();
             let author = commit.author().name().map(|s| s.to_string());
 
             return FileGitInfo {
                 hash: Some(hash),
                 short_hash: Some(short_hash),
-                commit_date: Some(commit_date),
+                commit_timestamp: Some(commit_timestamp),
                 author,
                 is_dirty,
             };

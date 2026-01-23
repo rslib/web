@@ -1,6 +1,7 @@
 //! Git module (rs.git)
 
 use super::helpers::{is_path_within_root, resolve_path};
+use crate::git::{get_file_git_info, get_git_info};
 use mlua::{Lua, Result, Table, Value};
 use std::path::{Path, PathBuf};
 
@@ -11,16 +12,10 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
     // info(path?) - Get git info for repo, file, or directory
     let root_clone = root.clone();
     let info_fn = lua.create_function(move |lua, path: Option<String>| {
-        use git2::Repository;
-
-        let repo = match Repository::discover(&root_clone) {
-            Ok(r) => r,
-            Err(_) => return Ok(Value::Nil),
-        };
-
         let result = lua.create_table()?;
 
         if let Some(ref p) = path {
+            // File/directory-specific git info
             let resolved = resolve_path(p, &root_clone);
             if sandbox && !is_path_within_root(&resolved, &root_clone) {
                 return Err(mlua::Error::RuntimeError(format!(
@@ -29,90 +24,54 @@ pub fn create_module(lua: &Lua, project_root: &Path, sandbox: bool) -> Result<Ta
                 )));
             }
 
-            let repo_root = repo.workdir().unwrap_or(root_clone.as_path());
-            let rel_path = resolved.strip_prefix(repo_root).unwrap_or(&resolved);
+            let file_info = get_file_git_info(&resolved);
 
-            let mut revwalk = match repo.revwalk() {
-                Ok(r) => r,
-                Err(_) => return Ok(Value::Nil),
-            };
-            revwalk.push_head().ok();
-            revwalk.set_sorting(git2::Sort::TIME).ok();
-
-            for oid in revwalk.flatten() {
-                if let Ok(commit) = repo.find_commit(oid) {
-                    let dominated = if let Ok(parent) = commit.parent(0) {
-                        let tree = commit.tree().ok();
-                        let parent_tree = parent.tree().ok();
-                        if let (Some(t), Some(pt)) = (tree, parent_tree) {
-                            let diff = repo.diff_tree_to_tree(Some(&pt), Some(&t), None).ok();
-                            diff.map(|d| {
-                                d.deltas().any(|delta| {
-                                    delta
-                                        .new_file()
-                                        .path()
-                                        .map(|dp| dp.starts_with(rel_path))
-                                        .unwrap_or(false)
-                                        || delta
-                                            .old_file()
-                                            .path()
-                                            .map(|dp| dp.starts_with(rel_path))
-                                            .unwrap_or(false)
-                                })
-                            })
-                            .unwrap_or(false)
-                        } else {
-                            false
-                        }
-                    } else {
-                        commit
-                            .tree()
-                            .ok()
-                            .map(|t| t.get_path(rel_path).is_ok())
-                            .unwrap_or(false)
-                    };
-
-                    if dominated {
-                        let hash = commit.id().to_string();
-                        result.set("hash", hash.clone())?;
-                        result.set("short_hash", &hash[..7.min(hash.len())])?;
-                        result.set(
-                            "author",
-                            commit.author().name().unwrap_or("Unknown").to_string(),
-                        )?;
-                        if let Some(time) =
-                            chrono::DateTime::from_timestamp(commit.time().seconds(), 0)
-                        {
-                            result.set("date", time.format("%Y-%m-%d").to_string())?;
-                        }
-                        return Ok(Value::Table(result));
-                    }
-                }
-            }
-            return Ok(Value::Nil);
-        }
-
-        if let Ok(head) = repo.head() {
-            if let Some(oid) = head.target() {
-                let hash = oid.to_string();
+            if let Some(hash) = file_info.hash {
                 result.set("hash", hash.clone())?;
-                result.set("short_hash", &hash[..7.min(hash.len())])?;
-
-                if let Ok(commit) = repo.find_commit(oid)
-                    && let Some(time) = chrono::DateTime::from_timestamp(commit.time().seconds(), 0)
-                {
-                    result.set("date", time.format("%Y-%m-%d").to_string())?;
-                }
+                result.set(
+                    "short_hash",
+                    file_info
+                        .short_hash
+                        .unwrap_or_else(|| hash[..7.min(hash.len())].to_string()),
+                )?;
+            } else {
+                return Ok(Value::Nil);
             }
 
-            if let Some(name) = head.shorthand() {
-                result.set("branch", name.to_string())?;
+            if let Some(author) = file_info.author {
+                result.set("author", author)?;
             }
+
+            if let Some(ts) = file_info.commit_timestamp {
+                result.set("timestamp", ts)?;
+            }
+
+            result.set("dirty", file_info.is_dirty)?;
+        } else {
+            // Repository-level git info
+            let repo_info = get_git_info();
+
+            if let Some(ref hash) = repo_info.hash {
+                result.set("hash", hash.as_str())?;
+                result.set(
+                    "short_hash",
+                    repo_info
+                        .short_hash
+                        .as_deref()
+                        .unwrap_or(&hash[..7.min(hash.len())]),
+                )?;
+            }
+
+            if let Some(ref branch) = repo_info.branch {
+                result.set("branch", branch.as_str())?;
+            }
+
+            if let Some(ts) = repo_info.commit_timestamp {
+                result.set("timestamp", ts)?;
+            }
+
+            result.set("dirty", repo_info.is_dirty)?;
         }
-
-        let statuses = repo.statuses(None).ok();
-        let dirty = statuses.map(|s| !s.is_empty()).unwrap_or(false);
-        result.set("dirty", dirty)?;
 
         Ok(Value::Table(result))
     })?;

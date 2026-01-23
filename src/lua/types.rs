@@ -245,9 +245,9 @@ pub static LUA_CLASSES: &[LuaClass] = &[
                 description: "Short commit hash (7 chars)",
             },
             LuaField {
-                name: "date",
-                typ: "string",
-                description: "Commit date (YYYY-MM-DD)",
+                name: "timestamp",
+                typ: "number",
+                description: "Commit timestamp (Unix seconds)",
             },
             LuaField {
                 name: "author",
@@ -280,6 +280,53 @@ pub static LUA_CLASSES: &[LuaClass] = &[
                 name: "height",
                 typ: "number",
                 description: "Height in pixels",
+            },
+        ],
+    },
+    LuaClass {
+        name: "DateTime",
+        description: "Date and time components",
+        is_generic: false,
+        fields: &[
+            LuaField {
+                name: "year",
+                typ: "number",
+                description: "Year (e.g., 2024)",
+            },
+            LuaField {
+                name: "month",
+                typ: "number",
+                description: "Month (1-12)",
+            },
+            LuaField {
+                name: "day",
+                typ: "number",
+                description: "Day of month (1-31)",
+            },
+            LuaField {
+                name: "hour",
+                typ: "number",
+                description: "Hour (0-23)",
+            },
+            LuaField {
+                name: "min",
+                typ: "number",
+                description: "Minute (0-59)",
+            },
+            LuaField {
+                name: "sec",
+                typ: "number",
+                description: "Second (0-59)",
+            },
+            LuaField {
+                name: "weekday",
+                typ: "number",
+                description: "Day of week (1=Monday, 7=Sunday)",
+            },
+            LuaField {
+                name: "yday",
+                typ: "number",
+                description: "Day of year (1-366)",
             },
         ],
     },
@@ -1233,14 +1280,48 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     // rs.date - Date Operations
     // ========================================================================
     LuaFunction {
+        name: "now",
+        module: Some("date"),
+        description: "Get current Unix timestamp",
+        params: &[],
+        returns: "number",
+        generic_return: None,
+    },
+    LuaFunction {
+        name: "from_timestamp",
+        module: Some("date"),
+        description: "Convert Unix timestamp to datetime table",
+        params: &[LuaParam {
+            name: "ts",
+            typ: "number",
+            description: "Unix timestamp (seconds)",
+            optional: false,
+        }],
+        returns: "DateTime|nil",
+        generic_return: None,
+    },
+    LuaFunction {
+        name: "to_timestamp",
+        module: Some("date"),
+        description: "Convert date/datetime to Unix timestamp",
+        params: &[LuaParam {
+            name: "date",
+            typ: "number|string|DateTime",
+            description: "Date to convert",
+            optional: false,
+        }],
+        returns: "number|nil",
+        generic_return: None,
+    },
+    LuaFunction {
         name: "format",
         module: Some("date"),
-        description: "Format a date string",
+        description: "Format a date/datetime using strftime format",
         params: &[
             LuaParam {
                 name: "date",
-                typ: "string|{ year: number, month: number, day: number }",
-                description: "Date to format",
+                typ: "number|string|DateTime",
+                description: "Date to format (timestamp, string, or table)",
                 optional: false,
             },
             LuaParam {
@@ -1256,14 +1337,22 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "parse",
         module: Some("date"),
-        description: "Parse date string to table",
-        params: &[LuaParam {
-            name: "str",
-            typ: "string",
-            description: "Date string to parse",
-            optional: false,
-        }],
-        returns: "{ year: number, month: number, day: number }|nil",
+        description: "Parse date/datetime string to table",
+        params: &[
+            LuaParam {
+                name: "str",
+                typ: "string",
+                description: "Date string to parse",
+                optional: false,
+            },
+            LuaParam {
+                name: "format",
+                typ: "string",
+                description: "Custom strftime format (auto-detects if omitted)",
+                optional: true,
+            },
+        ],
+        returns: "DateTime|nil",
         generic_return: None,
     },
     LuaFunction {
@@ -1272,11 +1361,66 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
         description: "Format date for RSS feeds (RFC 2822)",
         params: &[LuaParam {
             name: "date",
-            typ: "string|{ year: number, month: number, day: number }",
+            typ: "number|string|DateTime",
             description: "Date to format",
             optional: false,
         }],
         returns: "string|nil",
+        generic_return: None,
+    },
+    LuaFunction {
+        name: "iso_format",
+        module: Some("date"),
+        description: "Format date as ISO 8601",
+        params: &[LuaParam {
+            name: "date",
+            typ: "number|string|DateTime",
+            description: "Date to format",
+            optional: false,
+        }],
+        returns: "string|nil",
+        generic_return: None,
+    },
+    LuaFunction {
+        name: "add",
+        module: Some("date"),
+        description: "Add time to a date",
+        params: &[
+            LuaParam {
+                name: "date",
+                typ: "number|string|DateTime",
+                description: "Base date",
+                optional: false,
+            },
+            LuaParam {
+                name: "delta",
+                typ: "{ years?: number, months?: number, days?: number, hours?: number, mins?: number, secs?: number }",
+                description: "Time to add",
+                optional: false,
+            },
+        ],
+        returns: "DateTime|nil",
+        generic_return: None,
+    },
+    LuaFunction {
+        name: "diff",
+        module: Some("date"),
+        description: "Get difference between two dates in seconds",
+        params: &[
+            LuaParam {
+                name: "date1",
+                typ: "number|string|DateTime",
+                description: "First date",
+                optional: false,
+            },
+            LuaParam {
+                name: "date2",
+                typ: "number|string|DateTime",
+                description: "Second date",
+                optional: false,
+            },
+        ],
+        returns: "number|nil",
         generic_return: None,
     },
     // ========================================================================

@@ -103,7 +103,17 @@
 //!
 //! **Content Processing:**
 //! - `html_to_text(html)` - Convert HTML to plain text
-//! - `rss_date(date_string)` - Format date for RSS (RFC 2822)
+//!
+//! **Date & Time (rs.date):**
+//! - `now()` - Get current Unix timestamp
+//! - `from_timestamp(ts)` - Convert Unix timestamp to DateTime table
+//! - `to_timestamp(date)` - Convert date to Unix timestamp
+//! - `format(date, format)` - Format date using strftime
+//! - `parse(str, format?)` - Parse date string (auto-detects or custom format)
+//! - `rss_format(date)` - Format for RSS (RFC 2822)
+//! - `iso_format(date)` - Format as ISO 8601
+//! - `add(date, delta)` - Add time to date
+//! - `diff(date1, date2)` - Difference in seconds
 //!
 //! **Markdown (rs.markdown):**
 //! - `render(content, opts?)` - Render markdown to HTML with optional plugins
@@ -158,8 +168,6 @@
 //! - `reading_time(text, wpm?)` - Calculate reading time in minutes
 //! - `truncate(text, len, suffix?)` - Truncate text with optional suffix
 //! - `strip_tags(html)` - Remove HTML tags
-//! - `format_date(date, format)` - Format a date string
-//! - `parse_date(str)` - Parse date string to table {year, month, day}
 //! - `hash(content)` - Hash content (xxHash64)
 //! - `hash_file(path)` - Hash file contents
 //! - `url_encode(str)` - URL encode a string
@@ -187,7 +195,7 @@
 //! **Environment:**
 //! - `env(name, default?)` - Get environment variable with optional default
 //! - `print(...)` - Log output to build log
-//! - `git_info(path?)` - Get git info (hash, branch, author, date, dirty)
+//! - `git_info(path?)` - Get git info (hash, branch, author, timestamp, dirty)
 //!
 //! **Parallel (rs.parallel):** Rayon-backed true parallel operations
 //! - `load_json(paths)` / `load_yaml(paths)` - Load multiple files in parallel
