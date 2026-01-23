@@ -368,14 +368,14 @@ return {{
   }},
 
   pages = function(ctx)
-    local index = rs.read_frontmatter("site/index.md")
+    local index = rs.data.load_frontmatter("site/index.md")
 
     return {{
       {{
         path = "/",
         template = "page.html",
         title = index.title,
-        content = rs.render_markdown(index.content),
+        content = rs.markdown.render(index.content),
       }},
     }}
   end,

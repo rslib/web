@@ -376,7 +376,7 @@ Parallel collection operations:
 
 | Function | Description |
 |----------|-------------|
-| `rs.env.get(name)` | Get environment variable |
+| `rs.env.get(name, default?)` | Get environment variable with optional default |
 
 **Logging (rs.log):**
 

@@ -462,12 +462,16 @@ impl Config {
 
     /// Render markdown content using rs.markdown.render with default plugins
     pub fn render_markdown(&self, content: &str) -> Result<String> {
-        // Get rs.markdown.render function
-        let rs: Table = self
+        // Get rs module via require("rs-web")
+        let require: Function = self
             .lua
             .globals()
-            .get("rs")
-            .map_err(|e| anyhow::anyhow!("Failed to get rs module: {}", e))?;
+            .get("require")
+            .map_err(|e| anyhow::anyhow!("Failed to get require function: {}", e))?;
+
+        let rs: Table = require
+            .call("rs-web")
+            .map_err(|e| anyhow::anyhow!("Failed to require rs-web module: {}", e))?;
 
         let markdown: Table = rs
             .get("markdown")

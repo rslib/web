@@ -1534,13 +1534,21 @@ pub static LUA_FUNCTIONS: &[LuaFunction] = &[
     LuaFunction {
         name: "get",
         module: Some("env"),
-        description: "Get environment variable",
-        params: &[LuaParam {
-            name: "name",
-            typ: "string",
-            description: "Variable name",
-            optional: false,
-        }],
+        description: "Get environment variable with optional default value",
+        params: &[
+            LuaParam {
+                name: "name",
+                typ: "string",
+                description: "Variable name",
+                optional: false,
+            },
+            LuaParam {
+                name: "default",
+                typ: "string",
+                description: "Default value if variable is not set",
+                optional: true,
+            },
+        ],
         returns: "string|nil",
         generic_return: None,
     },

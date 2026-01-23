@@ -185,7 +185,7 @@
 //! - `values(table)` - Get all values from a table
 //!
 //! **Environment:**
-//! - `env(name)` - Get environment variable
+//! - `env(name, default?)` - Get environment variable with optional default
 //! - `print(...)` - Log output to build log
 //! - `git_info(path?)` - Get git info (hash, branch, author, date, dirty)
 //!
