@@ -114,7 +114,7 @@
         };
       in
       let
-        rs-web = rustPlatform.buildRustPackage {
+        commonArgs = {
           pname = cargoToml.package.name;
           version = cargoToml.package.version;
           src = ./.;
@@ -122,10 +122,19 @@
           nativeBuildInputs = with pkgs; [ pkg-config ];
           buildInputs = with pkgs; [ openssl ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
         };
+        rs-web = rustPlatform.buildRustPackage commonArgs;
+        rs-web-debug = rustPlatform.buildRustPackage (
+          commonArgs
+          // {
+            buildType = "debug";
+            # Debug builds don't need LTO or other release optimizations
+            CARGO_PROFILE_RELEASE_LTO = "false";
+          }
+        );
       in
       {
         packages = {
-          inherit rs-web;
+          inherit rs-web rs-web-debug;
           default = rs-web;
         };
 

@@ -36,7 +36,13 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: nix flake check
 
-      - name: Build
+      # Build debug for non-release, release for tagged
+      - name: Build (Debug)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        run: nix build .#rs-web-debug
+
+      - name: Build (Release)
+        if: startsWith(github.ref, 'refs/tags/')
         run: nix build .#rs-web
 
       # Push to cachix only on release/manual trigger
