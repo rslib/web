@@ -166,7 +166,12 @@
           shellHook = ''
             ${pre-commit-local.shellHook}
             export RUSTC_WRAPPER="${pkgs.sccache}/bin/sccache"
+            ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+              export CC="clang"
+              export RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold"
+            ''}
           '';
+          # Note: macOS uses Apple's fast linker (Xcode 15+), no mold needed
           nativeBuildInputs =
             with pkgs;
             [
@@ -178,6 +183,10 @@
               treefmtEval.config.build.wrapper
               nixfmt-rfc-style
               taplo
+            ]
+            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+              pkgs.mold
+              pkgs.clang
             ]
             ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
               pkgs.libiconv
