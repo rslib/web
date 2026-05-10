@@ -39,7 +39,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y mold ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'gcc-aarch64-linux-gnu' || '' }}
+          sudo apt-get install -y mold ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'gcc-aarch64-linux-gnu g++-aarch64-linux-gnu' || '' }}
 
       - uses: mozilla-actions/sccache-action@v0.0.9
 
@@ -51,10 +51,12 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
           RUSTC_WRAPPER: sccache
           SCCACHE_GHA_ENABLED: true
           RUSTFLAGS: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && '-C linker=clang -C link-arg=-fuse-ld=mold' || '' }}
-          CC: ${{ runner.os == 'Linux' && 'clang' || '' }}
+          CC: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'clang' || '' }}
 
       - name: Package
         shell: bash
