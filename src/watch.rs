@@ -2,12 +2,30 @@
 
 use anyhow::{Context, Result};
 use log::{debug, trace, warn};
+use notify::event::{AccessKind, EventKind, ModifyKind};
 use notify::{RecommendedWatcher, RecursiveMode};
-use notify_debouncer_mini::{DebouncedEventKind, new_debouncer};
+use notify_debouncer_full::{DebouncedEvent, RecommendedCache, new_debouncer};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
+
+fn is_mutation_event(kind: &EventKind) -> bool {
+    match kind {
+        EventKind::Create(_) | EventKind::Remove(_) => true,
+        EventKind::Modify(ModifyKind::Data(_))
+        | EventKind::Modify(ModifyKind::Name(_))
+        | EventKind::Modify(ModifyKind::Any) => true,
+        // Metadata-only / Other / Access(*) are intentionally ignored.
+        EventKind::Modify(ModifyKind::Metadata(_)) | EventKind::Modify(ModifyKind::Other) => false,
+        EventKind::Access(AccessKind::Any)
+        | EventKind::Access(AccessKind::Read)
+        | EventKind::Access(AccessKind::Open(_))
+        | EventKind::Access(AccessKind::Close(_))
+        | EventKind::Access(AccessKind::Other) => false,
+        EventKind::Any | EventKind::Other => false,
+    }
+}
 
 use crate::config::Config;
 
@@ -95,8 +113,8 @@ pub struct FileWatcher {
     output_dir: PathBuf,
     config_path: PathBuf,
     templates_dir: PathBuf,
-    rx: Receiver<Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>>,
-    _watcher: notify_debouncer_mini::Debouncer<RecommendedWatcher>,
+    rx: Receiver<Result<Vec<DebouncedEvent>, Vec<notify::Error>>>,
+    _watcher: notify_debouncer_full::Debouncer<RecommendedWatcher, RecommendedCache>,
 }
 
 impl FileWatcher {
@@ -116,24 +134,20 @@ impl FileWatcher {
         // Create channel for events
         let (tx, rx) = mpsc::channel();
 
-        // Create debounced watcher (300ms debounce)
-        let mut debouncer = new_debouncer(Duration::from_millis(300), tx)
+        let mut debouncer = new_debouncer(Duration::from_millis(300), None, tx)
             .context("Failed to create file watcher")?;
-
-        // Watch all relevant directories
-        let watcher = debouncer.watcher();
 
         // Watch config file
         if config_path.exists() {
             trace!("Watching config: {:?}", config_path);
-            watcher
+            debouncer
                 .watch(&config_path, RecursiveMode::NonRecursive)
                 .with_context(|| format!("Failed to watch config: {:?}", config_path))?;
         }
 
         // Watch project directory for content changes (Lua decides what's content)
         trace!("Watching project: {:?}", project_dir);
-        watcher
+        debouncer
             .watch(&project_dir, RecursiveMode::Recursive)
             .with_context(|| format!("Failed to watch project: {:?}", project_dir))?;
 
@@ -157,21 +171,34 @@ impl FileWatcher {
         let mut changes = ChangeSet::default();
         trace!("Waiting for file changes...");
 
-        // Block until we receive events
-        match self.rx.recv() {
-            Ok(Ok(events)) => {
-                trace!("Received {} file events", events.len());
-                for event in events {
-                    if event.kind == DebouncedEventKind::Any
-                        && let Some(change) = self.classify_change(&event.path)
-                    {
-                        trace!("Classified change: {:?} -> {:?}", event.path, change);
+        let process_events = |events: Vec<DebouncedEvent>, changes: &mut ChangeSet| {
+            for event in events {
+                if !is_mutation_event(&event.event.kind) {
+                    trace!(
+                        "Ignoring non-mutation event: {:?} {:?}",
+                        event.event.kind, event.event.paths
+                    );
+                    continue;
+                }
+                for path in &event.event.paths {
+                    if let Some(change) = self.classify_change(path) {
+                        trace!("Classified change: {:?} -> {:?}", path, change);
                         changes.add(change);
                     }
                 }
             }
-            Ok(Err(e)) => {
-                warn!("Watch error: {:?}", e);
+        };
+
+        // Block until we receive events
+        match self.rx.recv() {
+            Ok(Ok(events)) => {
+                trace!("Received {} file events", events.len());
+                process_events(events, &mut changes);
+            }
+            Ok(Err(errs)) => {
+                for e in errs {
+                    warn!("Watch error: {:?}", e);
+                }
             }
             Err(e) => {
                 return Err(anyhow::anyhow!("Watch channel closed: {:?}", e));
@@ -182,17 +209,11 @@ impl FileWatcher {
         let drain_start = Instant::now();
         while drain_start.elapsed() < Duration::from_millis(50) {
             match self.rx.try_recv() {
-                Ok(Ok(events)) => {
-                    for event in events {
-                        if event.kind == DebouncedEventKind::Any
-                            && let Some(change) = self.classify_change(&event.path)
-                        {
-                            changes.add(change);
-                        }
+                Ok(Ok(events)) => process_events(events, &mut changes),
+                Ok(Err(errs)) => {
+                    for e in errs {
+                        warn!("Watch error: {:?}", e);
                     }
-                }
-                Ok(Err(e)) => {
-                    warn!("Watch error: {:?}", e);
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => break,

@@ -17,12 +17,6 @@ A fast, opinionated static site generator built in Rust with support for:
 cargo install rs-web
 ```
 
-Or with Nix:
-
-```bash
-nix run github:rslib/web#rs-web
-```
-
 ## Quick Start
 
 ```bash

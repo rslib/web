@@ -549,9 +549,10 @@ impl Builder {
         }
 
         // Try incremental update if update_data function exists and we have cached data
-        let global_data = if self.config.has_update_data() && self.cached_global_data.is_some() {
+        let global_data = if let Some(cached) = self.cached_global_data.as_ref()
+            && self.config.has_update_data()
+        {
             debug!("Using incremental update_data()");
-            let cached = self.cached_global_data.as_ref().unwrap();
             // Convert absolute paths to relative paths for Lua
             let relative_paths: Vec<PathBuf> = changed_paths
                 .iter()
