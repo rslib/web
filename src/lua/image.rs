@@ -10,6 +10,25 @@ use mlua::{Lua, Result, Table, Value};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 
+/// Encode an image as AVIF. Quality 0-100 (higher is better). Speed is fixed at
+/// 6 (ravif scale: 1 slowest/best ... 10 fastest/worst); a build pipeline can
+/// afford a slower encode than a real-time service, and 6 still beats webp
+/// substantially in compression at comparable visual quality.
+fn encode_avif(img: &DynamicImage, quality: f32) -> std::result::Result<Vec<u8>, String> {
+    use image::codecs::avif::AvifEncoder;
+    use image::{ExtendedColorType, ImageEncoder};
+
+    let mut buf = Vec::new();
+    let q = quality.round().clamp(0.0, 100.0) as u8;
+    let encoder = AvifEncoder::new_with_speed_quality(&mut buf, 6, q);
+    let rgba = img.to_rgba8();
+    let (w, h) = (rgba.width(), rgba.height());
+    encoder
+        .write_image(rgba.as_raw(), w, h, ExtendedColorType::Rgba8)
+        .map_err(|e| format!("AVIF encode error: {}", e))?;
+    Ok(buf)
+}
+
 /// Apply EXIF orientation to an image
 fn apply_exif_orientation(img: DynamicImage, path: &Path) -> DynamicImage {
     use std::fs::File;
@@ -152,6 +171,13 @@ pub fn create_module(lua: &Lua, project_root: &Path, tracker: SharedTracker) -> 
                     let output_canonical = output_path.canonicalize().unwrap_or(output_path);
                     tracker_clone.record_write(output_canonical, &webp);
                 }
+                "avif" => {
+                    let avif = encode_avif(&resized, quality).map_err(mlua::Error::external)?;
+                    std::fs::write(&output_path, &avif)
+                        .map_err(|e| mlua::Error::external(format!("Failed to write: {}", e)))?;
+                    let output_canonical = output_path.canonicalize().unwrap_or(output_path);
+                    tracker_clone.record_write(output_canonical, &avif);
+                }
                 _ => {
                     resized
                         .save(&output_path)
@@ -218,6 +244,13 @@ pub fn create_module(lua: &Lua, project_root: &Path, tracker: SharedTracker) -> 
                     let output_canonical = output_path.canonicalize().unwrap_or(output_path);
                     tracker_clone.record_write(output_canonical, &webp);
                 }
+                "avif" => {
+                    let avif = encode_avif(&img, quality).map_err(mlua::Error::external)?;
+                    std::fs::write(&output_path, &avif)
+                        .map_err(|e| mlua::Error::external(format!("Failed to write: {}", e)))?;
+                    let output_canonical = output_path.canonicalize().unwrap_or(output_path);
+                    tracker_clone.record_write(output_canonical, &avif);
+                }
                 _ => {
                     img.save(&output_path)
                         .map_err(|e| mlua::Error::external(format!("Failed to save: {}", e)))?;
@@ -279,6 +312,13 @@ pub fn create_module(lua: &Lua, project_root: &Path, tracker: SharedTracker) -> 
                         .map_err(|e| mlua::Error::external(format!("Failed to write: {}", e)))?;
                     let output_canonical = output_path.canonicalize().unwrap_or(output_path);
                     tracker_clone.record_write(output_canonical, &webp);
+                }
+                "avif" => {
+                    let avif = encode_avif(&img, quality).map_err(mlua::Error::external)?;
+                    std::fs::write(&output_path, &avif)
+                        .map_err(|e| mlua::Error::external(format!("Failed to write: {}", e)))?;
+                    let output_canonical = output_path.canonicalize().unwrap_or(output_path);
+                    tracker_clone.record_write(output_canonical, &avif);
                 }
                 _ => {
                     img.save(&output_path)
@@ -377,6 +417,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, tracker: SharedTracker) -> 
                                 .map_err(|e| format!("WebP encode error: {}", e))?;
                             encoder.encode(quality).to_vec()
                         }
+                        "avif" => encode_avif(&resized, quality)?,
                         "jpg" | "jpeg" => {
                             let mut buf = Vec::new();
                             let mut cursor = std::io::Cursor::new(&mut buf);
@@ -481,6 +522,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, tracker: SharedTracker) -> 
                                 .map_err(|e| format!("WebP encoder error: {}", e))?;
                             encoder.encode(quality).to_vec()
                         }
+                        "avif" => encode_avif(&img, quality)?,
                         "jpg" | "jpeg" => {
                             let mut buf = Vec::new();
                             let mut cursor = std::io::Cursor::new(&mut buf);
@@ -583,6 +625,7 @@ pub fn create_module(lua: &Lua, project_root: &Path, tracker: SharedTracker) -> 
                                 .map_err(|e| format!("WebP encoder error: {}", e))?;
                             encoder.encode(quality).to_vec()
                         }
+                        "avif" => encode_avif(&img, quality)?,
                         "jpg" | "jpeg" => {
                             let mut buf = Vec::new();
                             let mut cursor = std::io::Cursor::new(&mut buf);

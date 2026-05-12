@@ -2,6 +2,23 @@
 //!
 //! Provides:
 //! - rs.fonts.download_google_font(family, options) - Download Google Font files
+//!
+//! Options:
+//!   fonts_dir  (required) where to write woff2 files
+//!   css_path   (required) where to write the @font-face CSS
+//!   css_prefix URL prefix for rewritten font URLs (default "/fonts")
+//!   weights    list of weights (default {400}); ignored when `axes` is set
+//!   axes       full Google CSS2 axes spec, e.g. "ital,wght@0,400;0,500;1,400"
+//!              or "ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400".
+//!              When set, takes precedence over `weights` and unlocks italic,
+//!              optical-size, and other variable axes.
+//!   subsets    list of subset labels to keep (e.g. {"latin","latin-ext"}).
+//!              Google emits each @font-face under a `/* <subset> */` comment;
+//!              non-matching blocks are dropped before woff2 fetch, so the
+//!              skipped Vietnamese / Cyrillic / Greek files never download.
+//!   display    font-display value (default "swap")
+//!   minify     minify generated CSS (default true)
+//!   cache      true | false | path (default true)
 
 use crate::assets::minify_css;
 use crate::lua::async_io::{AsyncIOTask, CacheOption, runtime};
@@ -46,6 +63,23 @@ pub fn create_module(lua: &Lua, project_root: &Path, tracker: SharedTracker) -> 
                         .collect()
                 })
                 .unwrap_or_else(|| vec![400]);
+
+            // Optional: axes - full Google CSS2 spec like "ital,wght@0,400;1,400".
+            // When provided, overrides `weights` for the URL.
+            let axes: Option<String> = options.get::<String>("axes").ok();
+
+            // Optional: subsets - list of subset labels to keep ("latin",
+            // "latin-ext", "vietnamese", ...). Empty/missing means keep all.
+            let subsets: Vec<String> = options
+                .get::<Table>("subsets")
+                .ok()
+                .map(|table| {
+                    table
+                        .pairs::<i64, String>()
+                        .filter_map(|pair| pair.ok().map(|(_, v)| v))
+                        .collect()
+                })
+                .unwrap_or_default();
 
             // Optional: display
             let display: String = options
@@ -96,27 +130,41 @@ pub fn create_module(lua: &Lua, project_root: &Path, tracker: SharedTracker) -> 
                 root_clone.join(&css_path_str)
             };
 
-            // Build Google Fonts CSS URL
-            let weight_str = weights
-                .iter()
-                .map(|w| w.to_string())
-                .collect::<Vec<_>>()
-                .join(";");
+            // Build Google Fonts CSS URL.
+            // Prefer the explicit `axes` spec (supports italic, opsz, etc.);
+            // otherwise fall back to the legacy `wght@{weights}` form.
             let family_encoded = family.replace(' ', "+");
+            let axes_part = match &axes {
+                Some(a) if !a.is_empty() => a.clone(),
+                _ => format!(
+                    "wght@{}",
+                    weights
+                        .iter()
+                        .map(|w| w.to_string())
+                        .collect::<Vec<_>>()
+                        .join(";")
+                ),
+            };
             let css_url = format!(
-                "https://fonts.googleapis.com/css2?family={}:wght@{}&display={}",
-                family_encoded, weight_str, display
+                "https://fonts.googleapis.com/css2?family={}:{}&display={}",
+                family_encoded, axes_part, display
             );
 
             let project_root = root_clone.clone();
             let tracker = tracker_clone.clone();
             let minify_opt = minify;
+            let subset_filter = subsets;
 
             // Spawn async task
             let handle = runtime().spawn(async move {
                 // Fetch CSS with Chrome UA
-                let css =
+                let raw_css =
                     fetch_google_fonts_css_async(&css_url, &project_root, &cache_option).await?;
+
+                // Subset filter: drop @font-face blocks whose preceding
+                // `/* <subset> */` comment isn't in the allow-list. Skipping
+                // here means the corresponding woff2 URLs never get fetched.
+                let css = filter_subsets(&raw_css, &subset_filter);
 
                 // Create fonts directory
                 tokio::fs::create_dir_all(&fonts_dir)
@@ -322,6 +370,28 @@ async fn fetch_google_fonts_css_async(
     }
 
     Ok(text)
+}
+
+/// Keep only `@font-face` blocks whose preceding `/* <subset> */` comment is in
+/// the allow-list. Empty list means no filtering (return original CSS).
+fn filter_subsets(css: &str, allow: &[String]) -> String {
+    if allow.is_empty() {
+        return css.to_string();
+    }
+    let allow_set: std::collections::HashSet<&str> = allow.iter().map(|s| s.as_str()).collect();
+
+    // Match `/* subset */\s*@font-face { ... }`. Stops at the first `}` because
+    // @font-face blocks in Google's output never contain nested braces.
+    let re = Regex::new(r"/\*\s*([\w-]+)\s*\*/\s*(@font-face\s*\{[^}]*\})").unwrap();
+    let mut out = String::with_capacity(css.len());
+    for cap in re.captures_iter(css) {
+        let label = &cap[1];
+        if allow_set.contains(label) {
+            out.push_str(&cap[2]);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// Extract filename from Google Fonts URL
